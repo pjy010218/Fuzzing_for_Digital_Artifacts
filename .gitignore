@@ -23,6 +23,7 @@ parts/
 sdist/
 var/
 venv/
+experiment_data/
 wheels/
 share/python-wheels/
 *.egg-info/
