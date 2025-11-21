@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 from core.tracer.ebpf_engine import EBPFTracer
 from core.fuzzing.gui.xvfb_display import XvfbDisplay
 from core.metadata.extractor import MetadataExtractor
+from core.fuzzing.ipc import FeedbackServer
 # Note: We don't import SmartFuzzer class directly because we run it via subprocess
 # to ensure it has a clean accessibility environment.
 
@@ -33,6 +34,8 @@ class ArtifactDiscoverySession:
         self.tracer = EBPFTracer()
         self.extractor = MetadataExtractor()
         self.proc: Optional[subprocess.Popen] = None
+
+        self.ipc_server = FeedbackServer()
         
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -42,6 +45,8 @@ class ArtifactDiscoverySession:
     def run(self):
         logger.info(f"[*] Starting Discovery Session for {self.app_name}")
         self._setup_inputs()
+
+        self.ipc_server.start()
 
         # 1. Start Virtual Display
         with XvfbDisplay(display_id=99) as xvfb:
@@ -82,14 +87,26 @@ class ArtifactDiscoverySession:
             # --- MAIN LOOP ---
             logger.info(f"[Phase 3] Fuzzing for {self.duration} seconds...")
             start_time = time.time()
+
+            total_artifacts = 0
             while time.time() - start_time < self.duration:
                 if self.proc.poll() is not None:
                     logger.warning("Target application crashed or exited early!")
                     break
+                
+                new_events = self.tracer.get_events()
+                count = len(new_events)
+
+                if count > 0:
+                    total_artifacts = count
+                    logger.info(f"[+] Total Artifacts Discovered: {total_artifacts}")
+                    self.ipc_server.update_count(total_artifacts)
+
                 time.sleep(1)
             
             # [Phase 4] Teardown
             logger.info("[Phase 4] Stopping experiment...")
+            self.ipc_server.stop()
             self.tracer.stop_trace()
             if fuzz_thread: 
                 fuzz_thread.terminate()
@@ -146,6 +163,6 @@ if __name__ == "__main__":
     session = ArtifactDiscoverySession(
         target_cmd=["mousepad"], 
         app_name="Mousepad", 
-        duration=15
+        duration=120
     )
     session.run()

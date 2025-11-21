@@ -4,14 +4,14 @@ import threading
 from bcc import BPF
 from collections import deque
 
-# --- C BPF PROGRAM (System-Wide) ---
+# --- C BPF PROGRAM ---
 bpf_source = """
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 
 struct event_data_t {
     u32 pid;
-    u32 type;        // 1=OPEN, 2=DELETE
+    u32 type;        // 1=OPEN, 2=DELETE, 3=RENAME
     char comm[16];   
     char fname[256]; 
 };
@@ -21,7 +21,7 @@ BPF_PERF_OUTPUT(events);
 TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     struct event_data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.type = 1; 
+    data.type = 1; // OPEN
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->filename);
     if (data.fname[0] == 0) return 0;
@@ -32,9 +32,24 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
 TRACEPOINT_PROBE(syscalls, sys_enter_unlinkat) {
     struct event_data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.type = 2; 
+    data.type = 2; // DELETE
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->pathname);
+    if (data.fname[0] == 0) return 0;
+    events.perf_submit(args, &data, sizeof(data));
+    return 0;
+}
+
+TRACEPOINT_PROBE(syscalls, sys_enter_renameat) {
+    struct event_data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.type = 3; // RENAME
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    
+    // CRITICAL: We read the 'newname' (destination), not 'oldname'
+    // This captures the final artifact name.
+    bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->newname);
+    
     if (data.fname[0] == 0) return 0;
     events.perf_submit(args, &data, sizeof(data));
     return 0;
@@ -55,10 +70,10 @@ class EBPFTracer:
         self.running = False
         self.thread = None
         self.event_queue = deque()
-        self.event_types = {1: "OPEN", 2: "DELETE"}
+        self.event_types = {1: "OPEN", 2: "DELETE", 3: "RENAME"}
 
     def start_trace(self, root_pid, target_name=""):
-        print(f"[+] Compiling eBPF (User-Space Filter Mode)...")
+        print(f"[+] Compiling eBPF (Rename-Aware Mode)...")
         self.bpf = BPF(text=bpf_source)
         self.bpf["events"].open_perf_buffer(self._process_event)
         self.running = True
@@ -71,25 +86,29 @@ class EBPFTracer:
         filename = event.fname.decode('utf-8', 'ignore')
         proc_name = event.comm.decode('utf-8', 'ignore').lower()
 
-        # --- NUCLEAR WHITELIST FILTER ---
-        # We ONLY want to see files created in user directories.
-        # This eliminates 99.9% of noise (libraries, fonts, systemd).
+        # --- FILTER LOGIC ---
+        # Whitelist User Directories
+        is_interesting = False
+        if filename.startswith("/home"): is_interesting = True
+        if filename.startswith("/root"): is_interesting = True
+        if filename.startswith("/tmp"):  is_interesting = True
         
-        is_interesting_path = False
-        if filename.startswith("/home"): is_interesting_path = True
-        if filename.startswith("/root"): is_interesting_path = True
-        if filename.startswith("/tmp"):  is_interesting_path = True
-        
-        # Filter out our own debug logs and python cache
+        # Blacklist Self-Noise
         if "fuzzer_debug" in filename or "__pycache__" in filename or "ui_tree" in filename:
-            is_interesting_path = False
+            is_interesting = False
+        
+        # Special Case: Allow hidden files if they are in /tmp (might be temp writes)
+        # But ignore noisy hidden files elsewhere
+        if "/." in filename and not filename.startswith("/tmp"):
+             # Allow specific configs
+             if not any(x in filename for x in ["config", "local", "xbel"]):
+                 is_interesting = False
 
-        if not is_interesting_path:
+        if not is_interesting:
             return
-        # --------------------------------
+        # --------------------
 
-        # Print exactly what we found to the console
-        print(f"   [Trace] {proc_name} -> {filename}")
+        print(f"   [Trace] {proc_name} ({self.event_types.get(event.type)}) -> {filename}")
 
         py_event = {
             "timestamp": time.time(),

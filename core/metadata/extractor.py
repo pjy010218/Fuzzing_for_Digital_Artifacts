@@ -3,11 +3,11 @@ import json
 import yaml
 import sqlite3
 import hashlib
-import magic  # Requires: pip install python-magic
+import magic  # pip install python-magic
 import string
-import struct
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 @dataclass
 class ArtifactMetadata:
@@ -16,19 +16,15 @@ class ArtifactMetadata:
     size: int
     mime_type: str
     sha256: str
-    file_entropy: float  # Good for detecting encrypted/packed files
-    content_summary: Dict[str, Any] # The "DNA" for the LLM
+    file_entropy: float
+    content_summary: Dict[str, Any]
 
 class MetadataExtractor:
     def __init__(self):
         self.magic = magic.Magic(mime=True)
 
     def extract(self, filepath: str) -> Optional[Dict]:
-        """
-        Main entry point. Analyzes a file and returns a JSON-serializable dict
-        ready for the LLM prompt.
-        """
-        if not os.path.exists(filepath):
+        if not os.path.exists(filepath) or os.path.isdir(filepath):
             return None
 
         try:
@@ -45,16 +41,19 @@ class MetadataExtractor:
                 content_summary={}
             )
 
-            # Strategy Pattern for content extraction
+            # --- CONTENT ANALYSIS ROUTING ---
             if "sqlite" in mime or self._is_sqlite(filepath):
                 metadata.content_summary = self._analyze_sqlite(filepath)
-            elif "text" in mime or "json" in mime or "xml" in mime:
-                metadata.content_summary = self._analyze_text(filepath, mime)
-            elif "application/x-sharedlib" in mime or "application/x-executable" in mime:
-                metadata.content_summary = self._analyze_binary(filepath)
+            
+            elif "xml" in mime or filepath.endswith(".xbel") or filepath.endswith(".xml"):
+                metadata.content_summary = self._analyze_xml(filepath)
+            
+            elif "text" in mime or "json" in mime or "yaml" in mime:
+                metadata.content_summary = self._analyze_text(filepath)
+            
             else:
-                # Fallback for unknown blobs
-                metadata.content_summary = {"preview": "Binary data", "strings": self._extract_strings(filepath)}
+                # Binary/Unknown fallback
+                metadata.content_summary = self._analyze_binary(filepath)
 
             return asdict(metadata)
 
@@ -62,153 +61,132 @@ class MetadataExtractor:
             return {
                 "filepath": filepath,
                 "error": str(e),
-                "mime_type": "error/access-denied"
+                "mime_type": "error"
             }
 
     def _get_sha256(self, filepath: str) -> str:
-        sha256_hash = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
+        sha = hashlib.sha256()
+        try:
+            with open(filepath, "rb") as f:
+                while chunk := f.read(4096):
+                    sha.update(chunk)
+            return sha.hexdigest()
+        except: return "hash_error"
 
     def _calculate_entropy(self, filepath: str) -> float:
-        # Quick entropy calc to detect encryption/compression
         import math
-        with open(filepath, 'rb') as f:
-            data = f.read(4096) # Sample first 4KB
-        if not data: return 0.0
-        
-        entropy = 0
-        for x in range(256):
-            p_x = float(data.count(x)) / len(data)
-            if p_x > 0:
-                entropy += - p_x * math.log(p_x, 2)
-        return entropy
+        try:
+            with open(filepath, 'rb') as f:
+                data = f.read(4096)
+            if not data: return 0.0
+            entropy = 0
+            for x in range(256):
+                p_x = float(data.count(x)) / len(data)
+                if p_x > 0:
+                    entropy += - p_x * math.log(p_x, 2)
+            return entropy
+        except: return 0.0
 
     def _is_sqlite(self, filepath: str) -> bool:
-        # Standard magic sometimes misses SQLite if extension is weird
-        with open(filepath, 'rb') as f:
-            header = f.read(16)
-        return header == b'SQLite format 3\x00'
+        try:
+            with open(filepath, 'rb') as f:
+                return f.read(16) == b'SQLite format 3\x00'
+        except: return False
 
     def _analyze_sqlite(self, filepath: str) -> Dict[str, Any]:
-        """
-        Crucial for D3FEND: Extracts table names and column names.
-        This allows LLM to map 'cookies' table -> Browser Artifact.
-        """
-        summary = {"type": "sqlite_database", "tables": []}
+        summary = {"type": "sqlite_db", "tables": []}
         try:
-            # Open in Read-Only mode (URI) to prevent locking/modifying
+            # Open Read-Only
             conn = sqlite3.connect(f"file:{filepath}?mode=ro", uri=True)
             cursor = conn.cursor()
-            
-            # Get list of tables
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
-            
-            for table_name in tables:
-                t_name = table_name[0]
-                # Get columns for this table
+            for table in cursor.fetchall():
+                t_name = table[0]
                 cursor.execute(f"PRAGMA table_info({t_name})")
-                columns = [col[1] for col in cursor.fetchall()]
-                
-                # Sample data (first row) to give LLM context
-                cursor.execute(f"SELECT * FROM {t_name} LIMIT 1")
-                sample = cursor.fetchone()
-                
-                summary["tables"].append({
-                    "name": t_name,
-                    "columns": columns,
-                    "sample_row": str(sample)[:200] # Truncate for token limits
-                })
+                cols = [c[1] for c in cursor.fetchall()]
+                summary["tables"].append(f"{t_name} {cols}")
             conn.close()
         except Exception as e:
-            summary["error"] = f"SQLite parsing failed: {str(e)}"
+            summary["error"] = str(e)
         return summary
 
-    def _analyze_text(self, filepath: str, mime: str) -> Dict[str, Any]:
-        """Handles JSON, YAML, INI, and plain text logs."""
+    def _analyze_xml(self, filepath: str) -> Dict[str, Any]:
+        """
+        Parses XML/XBEL to give the LLM structural context.
+        Perfect for history files, configs, and UI definitions.
+        """
+        summary = {"type": "xml_structure"}
+        try:
+            tree = ET.parse(filepath)
+            root = tree.getroot()
+            summary["root_tag"] = root.tag
+            
+            # Extract top-level children tags to define structure
+            children = [child.tag for child in root][:10]
+            summary["children_tags"] = list(set(children)) # Deduplicate
+            
+            # Sample text content (e.g., bookmark URLs)
+            text_samples = []
+            for elem in root.iter():
+                if elem.text and len(elem.text.strip()) > 3:
+                    text_samples.append(elem.text.strip())
+                if 'href' in elem.attrib:
+                    text_samples.append(elem.attrib['href'])
+                if len(text_samples) > 5: break
+            
+            summary["samples"] = text_samples
+        except Exception as e:
+            summary["error"] = f"XML Parse Error: {e}"
+            # Fallback to text analysis if XML fails
+            return self._analyze_text(filepath)
+        return summary
+
+    def _analyze_text(self, filepath: str) -> Dict[str, Any]:
+        """
+        Reads the actual content of text files.
+        """
         summary = {"type": "text_content"}
-        
         try:
             with open(filepath, 'r', errors='ignore') as f:
-                content = f.read()
-
-            # Try JSON
-            try:
-                data = json.loads(content)
-                summary["structure"] = "json"
-                # Extract top-level keys only (privacy + token economy)
-                if isinstance(data, dict):
-                    summary["keys"] = list(data.keys())
-                return summary
-            except json.JSONDecodeError:
-                pass
-
-            # Try YAML (common for configs)
-            try:
-                # Safe load to avoid code execution vulnerabilities
-                data = yaml.safe_load(content) 
-                if isinstance(data, dict):
-                    summary["structure"] = "yaml"
-                    summary["keys"] = list(data.keys())
-                    return summary
-            except:
-                pass
-
-            # Fallback: Text sampling
-            lines = content.splitlines()
-            summary["line_count"] = len(lines)
-            summary["head"] = lines[:5]
-            summary["tail"] = lines[-5:]
+                content = f.read(2048) # Read first 2KB
             
-            # Look for common tokens
-            if "http://" in content or "https://" in content:
-                summary["detected_features"] = ["urls"]
-            if "/" in content and bin(0) not in content:
-                summary["detected_features"] = ["file_paths"]
-                
+            # 1. Try JSON
+            try: 
+                js = json.loads(content)
+                summary["structure"] = "json"
+                summary["keys"] = list(js.keys()) if isinstance(js, dict) else "list"
+                return summary
+            except: pass
+
+            # 2. Plain Text Sampling
+            lines = content.splitlines()
+            summary["head"] = lines[:10]
+            
+            # 3. Keyword Detection (Forensic Hints)
+            hints = []
+            if "http" in content: hints.append("urls")
+            if "/" in content: hints.append("paths")
+            if "Forensic" in content: hints.append("user_created_content")
+            summary["detected_features"] = hints
+            
         except Exception as e:
             summary["error"] = str(e)
-            
         return summary
 
     def _analyze_binary(self, filepath: str) -> Dict[str, Any]:
-        """Simple introspection for executables/libraries."""
-        summary = {"type": "binary_elf"}
-        # Extract strings (simplest way to find URLs/IPs/paths in binary)
-        summary["strings_preview"] = self._extract_strings(filepath, min_len=6, limit=20)
+        summary = {"type": "binary"}
+        try:
+            # Extract printable strings (like the unix 'strings' command)
+            with open(filepath, "rb") as f:
+                data = f.read(4096)
+                chars = []
+                for byte in data:
+                    if 32 <= byte <= 126:
+                        chars.append(chr(byte))
+                    else:
+                        chars.append(' ')
+                strings = "".join(chars).split()
+                # Filter for meaningful length
+                summary["strings"] = [s for s in strings if len(s) > 4][:20]
+        except: pass
         return summary
-
-    def _extract_strings(self, filepath: str, min_len=4, limit=50) -> List[str]:
-        """Equivalent to Linux 'strings' command."""
-        with open(filepath, "rb") as f:
-            result = ""
-            found = []
-            for byte in f.read():
-                char = chr(byte)
-                if char in string.printable:
-                    result += char
-                    continue
-                if len(result) >= min_len:
-                    found.append(result)
-                    if len(found) >= limit:
-                        break
-                result = ""
-        return found
-
-# --- USAGE EXAMPLE ---
-if __name__ == "__main__":
-    # Create a dummy sqlite for testing
-    db_path = "/tmp/test_artifact.db"
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS user_visits (id INTEGER, url TEXT, timestamp INTEGER)")
-    c.execute("INSERT INTO user_visits VALUES (1, 'https://google.com', 1678889)")
-    conn.commit()
-    conn.close()
-
-    extractor = MetadataExtractor()
-    result = extractor.extract(db_path)
-    print(json.dumps(result, indent=2))
