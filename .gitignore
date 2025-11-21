@@ -23,6 +23,7 @@ parts/
 sdist/
 var/
 venv/
+core/fuzzing/gui/radamsa/
 experiment_data/
 wheels/
 share/python-wheels/
