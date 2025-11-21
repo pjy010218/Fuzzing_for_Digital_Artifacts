@@ -7,15 +7,11 @@ import subprocess
 import shutil
 from typing import List, Dict, Optional
 
-# Import our modules
 from core.tracer.ebpf_engine import EBPFTracer
 from core.fuzzing.gui.xvfb_display import XvfbDisplay
 from core.metadata.extractor import MetadataExtractor
 from core.fuzzing.ipc import FeedbackServer
-# Note: We don't import SmartFuzzer class directly because we run it via subprocess
-# to ensure it has a clean accessibility environment.
 
-# Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Orchestrator")
 
@@ -34,100 +30,110 @@ class ArtifactDiscoverySession:
         self.tracer = EBPFTracer()
         self.extractor = MetadataExtractor()
         self.proc: Optional[subprocess.Popen] = None
-
         self.ipc_server = FeedbackServer()
+        self.all_events = [] 
+        self.chrome_user_dir = ""
         
         os.makedirs(self.output_dir, exist_ok=True)
 
     def _setup_inputs(self):
         logger.info("[Phase 0] Setting up environment...")
+        # Chrome requires a dedicated user data dir to avoid messing up local profiles
+        self.chrome_user_dir = f"/tmp/chrome_fuzz_profile_{int(time.time())}"
+        os.makedirs(self.chrome_user_dir, exist_ok=True)
 
     def run(self):
         logger.info(f"[*] Starting Discovery Session for {self.app_name}")
         self._setup_inputs()
-
         self.ipc_server.start()
 
-        # 1. Start Virtual Display
         with XvfbDisplay(display_id=99) as xvfb:
-            
-            # [Phase 1] Start Tracing (BEFORE App Launch)
             logger.info("[Phase 1] Initializing eBPF Tracer...")
-            # Start system-wide tracing, filtering for our app
-            self.tracer.start_trace(root_pid=0, target_name=self.app_name)
+            # Start tracing, target 'chrome' specifically for filtering
+            self.tracer.start_trace(root_pid=0, target_name="chrome") 
             time.sleep(2) 
             
-            # [Phase 2] Launch Target Application
-            logger.info(f"[Phase 2] Launching: {' '.join(self.target_cmd)}")
+            # Append critical Chrome flags
+            cmd = self.target_cmd.copy()
+            # Check if command is likely Chrome/Chromium
+            if any(x in cmd[0] for x in ["google-chrome", "chromium", "chrome"]):
+                cmd.extend([
+                    "--no-sandbox", 
+                    "--disable-gpu", 
+                    "--force-renderer-accessibility", # CRITICAL for Dogtail to see DOM
+                    f"--user-data-dir={self.chrome_user_dir}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-dev-shm-usage" # Fix crashes in containers
+                ])
+
+            logger.info(f"[Phase 2] Launching: {' '.join(cmd)}")
             try:
                 self.proc = subprocess.Popen(
-                    self.target_cmd,
+                    cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     preexec_fn=os.setsid,
-                    env=os.environ # Ensure it gets DISPLAY/:99 and Accessibility Env
+                    env=os.environ
                 )
             except FileNotFoundError:
                 logger.error("Target executable not found!")
                 self.tracer.stop_trace()
                 return
 
-            # [Phase 3] Start Smart Fuzzing
-            logger.info("[Phase 3] Starting Smart Fuzzer (Dogtail)...")
+            logger.info("[Phase 3] Starting Smart Fuzzer...")
+            import sys
+            current_python = sys.executable
             
-            # We run the SmartFuzzer as a subprocess script.
-            # This ensures it inherits the correct D-Bus/Accessibility environment from XvfbDisplay
             fuzz_thread = subprocess.Popen(
-                ["python3", "core/fuzzing/gui/smart_tester.py", self.app_name], 
+                [current_python, "core/fuzzing/gui/smart_tester.py", self.app_name], 
                 env=os.environ.copy(),
                 stdout=None,
                 stderr=None
             )
             
-            # --- MAIN LOOP ---
             logger.info(f"[Phase 3] Fuzzing for {self.duration} seconds...")
             start_time = time.time()
-
             total_artifacts = 0
+            
             while time.time() - start_time < self.duration:
                 if self.proc.poll() is not None:
                     logger.warning("Target application crashed or exited early!")
                     break
                 
+                # Drain events from tracer and store persistently
                 new_events = self.tracer.get_events()
-                count = len(new_events)
-
-                if count > 0:
-                    total_artifacts = count
+                if new_events:
+                    self.all_events.extend(new_events)
+                    total_artifacts += len(new_events)
                     logger.info(f"[+] Total Artifacts Discovered: {total_artifacts}")
                     self.ipc_server.update_count(total_artifacts)
 
                 time.sleep(1)
             
-            # [Phase 4] Teardown
             logger.info("[Phase 4] Stopping experiment...")
             self.ipc_server.stop()
             self.tracer.stop_trace()
-            if fuzz_thread: 
-                fuzz_thread.terminate()
+            if fuzz_thread: fuzz_thread.terminate()
             self._cleanup()
 
-        # 5. Post-Processing
         self._analyze_results()
 
     def _cleanup(self):
-        """Safely kill the target application."""
-        if self.proc and self.proc.poll() is None:
+        if self.proc:
             try:
                 os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
                 self.proc.wait()
-            except ProcessLookupError:
-                pass
+            except: pass
+        
+        # Cleanup Chrome profile to avoid disk bloat
+        # if self.chrome_user_dir and os.path.exists(self.chrome_user_dir):
+        #    shutil.rmtree(self.chrome_user_dir, ignore_errors=True)
 
     def _analyze_results(self):
         logger.info("[Phase 5] Analyzing captured artifacts...")
-        
-        events = self.tracer.get_events()
+        # Use accumulated events, not empty queue
+        events = self.all_events
         logger.info(f"Captured {len(events)} raw syscall events")
 
         unique_artifacts = {}
@@ -135,14 +141,12 @@ class ArtifactDiscoverySession:
             fname = e['filename']
             if fname not in unique_artifacts:
                 unique_artifacts[fname] = {"syscalls": set(), "processes": set()}
-            
             unique_artifacts[fname]["syscalls"].add(e['type'])
             unique_artifacts[fname]["processes"].add(e['process_name'])
 
         report = []
         for filepath, data in unique_artifacts.items():
             meta = self.extractor.extract(filepath)
-            
             artifact_entry = {
                 "filepath": filepath,
                 "interactions": list(data["syscalls"]),
@@ -156,13 +160,13 @@ class ArtifactDiscoverySession:
         with open(output_json, "w") as f:
             json.dump(report, f, indent=2, default=str)
         
-        logger.info(f"[Success] Report saved to {output_json} with {len(report)} entries.")
+        logger.info(f"[Success] Report saved to {output_json}")
 
 if __name__ == "__main__":
-    # Note: "Mousepad" is the Accessibility Name, "mousepad" is the command
+    # Default Config for Chrome
     session = ArtifactDiscoverySession(
-        target_cmd=["mousepad"], 
-        app_name="Mousepad", 
+        target_cmd=["google-chrome"], 
+        app_name="Google Chrome", 
         duration=120
     )
     session.run()

@@ -24,67 +24,40 @@ class SmartFuzzer:
         
         config.defaultDelay = 1.5
         config.searchCutoffCount = 20
-    
-    def check_feedback(self, action_name):
-        """
-        Did the last action cause a kernel event?
-        """
-        current_score = self.feedback.get_artifact_count()
-        delta = current_score - self.last_score
-        self.last_score = current_score
-        
-        if delta > 0:
-            self.logger.info(f"[!!!] REWARD: '{action_name}' caused {delta} kernel events!")
-            return True
-        return False
+
+    def xdo(self, args):
+        try: subprocess.run(["xdotool"] + args, check=False)
+        except: pass
 
     def get_window_id(self):
-        """
-        Robustly finds the Window ID using xdotool.
-        Returns the ID as a string, or None if not found.
-        """
         try:
-            # Search for the window ID
-            # We use --name and --class to be sure
+            # Chrome windows usually contain "Google Chrome" in the title
             out = subprocess.check_output(
                 ["xdotool", "search", "--onlyvisible", "--name", self.app_name],
                 stderr=subprocess.DEVNULL
             ).decode().strip()
-            
-            if not out:
-                return None
-            
-            # If multiple IDs are returned, take the last one (usually the newest/active one)
+            if not out: return None
+            # If multiple windows (e.g. tooltips), grab the last created one
             return out.split('\n')[-1]
-        except:
-            return None
+        except: return None
 
     def focus_app(self):
-        """
-        Safely focuses the app. Prevents BadWindow errors.
-        """
         wid = self.get_window_id()
         if wid:
-            try:
-                subprocess.run(["xdotool", "windowactivate", "--sync", wid], check=False)
-                return True
-            except: pass
+            self.xdo(["windowactivate", "--sync", wid])
+            return True
         return False
-
-    def xdo(self, args):
-        """Raw X11 interaction helper"""
-        try: subprocess.run(["xdotool"] + args, check=False)
-        except: pass
 
     def connect(self):
         self.logger.info(f"[*] SmartFuzzer looking for app: {self.app_name}")
         start_wait = time.time()
         while time.time() - start_wait < 30:
             try:
-                # Use Dogtail for connection check
+                # Connect via Accessibility Bus
+                # Chrome usually registers as "Google Chrome"
                 target_lower = self.app_name.lower()
                 for app in dogtail.tree.root.applications():
-                    if app.name.lower() == target_lower:
+                    if target_lower in app.name.lower():
                         self.app_node = app
                         self.logger.info(f"[+] Attached to UI Tree: {app.name}")
                         return True
@@ -93,47 +66,60 @@ class SmartFuzzer:
         return False
 
     def populate_content(self):
-        try:
-            self.logger.info("[Action] Populating content...")
-            if self.focus_app():
-                # Click center safe zone
-                self.xdo(["mousemove", "960", "540", "click", "1"])
-                self.xdo(["type", "Forensic Evidence"])
-                self.xdo(["key", "Return"])
-                time.sleep(1)
-        except: pass
+        """
+        Interacts with the browser page to create history/cache artifacts.
+        """
+        self.logger.info("[Action] Interacting with Browser Page...")
+        if self.focus_app():
+            # 1. Click center of page (content area)
+            self.xdo(["mousemove", "960", "540", "click", "1"])
+            time.sleep(0.5)
+            
+            # 2. Focus URL Bar (Ctrl+L) and navigate
+            self.xdo(["key", "ctrl+l"])
+            time.sleep(0.5)
+            # Use a data URI to create content without needing internet
+            self.xdo(["type", "data:text/html,<h1>Forensic Evidence</h1><p>Test Artifact</p>"])
+            self.xdo(["key", "Return"])
+            time.sleep(3) # Wait for page load/render
 
     def blind_save_workflow(self):
         """
-        Safe Save Workflow that checks for window existence first.
+        Triggers Ctrl+S to save the webpage.
         """
-        fname = f"/tmp/artifact_{random.randint(1000,9999)}.txt"
+        fname = f"/tmp/artifact_{random.randint(1000,9999)}.html"
         self.logger.info(f"[Action] Safe Save Workflow for {fname}")
-
         self.last_score = self.feedback.get_artifact_count()
 
-        # 1. Ensure Focus (CRITICAL FIX)
-        if not self.focus_app():
-            self.logger.warning("[-] Could not focus app (Window not found). Skipping.")
-            return
+        if not self.focus_app(): return
 
-        # 2. Trigger Save
+        # 1. Trigger Save
         self.xdo(["key", "ctrl+s"])
-        time.sleep(2.0) 
+        time.sleep(2.5) # Chrome dialog might be slower to appear
 
-        if self.check_feedback("Save Workflow"):
-            self.logger.info(">> Fuzzer learned that 'CTRL+S' is a valid path!")
-
-        # 3. Type Filename
+        # 2. Type Filename (Blindly overwriting default)
         self.logger.info("    -> Typing Filename...")
         self.xdo(["type", "--delay", "100", fname])
         time.sleep(1.0)
 
-        # 4. Save & Confirm
+        # 3. Save & Confirm
         self.logger.info("    -> Pressing Enter...")
         self.xdo(["key", "Return"])
         time.sleep(1.0)
-        self.xdo(["key", "Return"])
+        self.xdo(["key", "Return"]) # Confirm overwrite
+
+        time.sleep(2) # Wait for download/save
+        if self.check_feedback("Save Workflow"):
+            self.logger.info(">> Fuzzer confirmed artifacts created!")
+
+    def check_feedback(self, action_name):
+        current_score = self.feedback.get_artifact_count()
+        delta = current_score - self.last_score
+        self.last_score = current_score
+        if delta > 0:
+            self.logger.info(f"[!!!] REWARD: {action_name} caused {delta} events!")
+            return True
+        return False
 
     def start(self):
         if not self.connect(): return
@@ -144,10 +130,12 @@ class SmartFuzzer:
         start_time = time.time()
         while time.time() - start_time < self.duration:
             self.blind_save_workflow()
+            # Chrome might need more time between saves
             time.sleep(5) 
 
 if __name__ == "__main__":
     import sys
-    app = sys.argv[1] if len(sys.argv) > 1 else "Mousepad"
-    fuzzer = SmartFuzzer(app, duration=40)
+    # Default to Google Chrome if run directly
+    app = sys.argv[1] if len(sys.argv) > 1 else "Google Chrome"
+    fuzzer = SmartFuzzer(app, duration=60)
     fuzzer.start()

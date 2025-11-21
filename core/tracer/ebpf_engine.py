@@ -21,7 +21,7 @@ BPF_PERF_OUTPUT(events);
 TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     struct event_data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.type = 1; // OPEN
+    data.type = 1; 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->filename);
     if (data.fname[0] == 0) return 0;
@@ -32,7 +32,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
 TRACEPOINT_PROBE(syscalls, sys_enter_unlinkat) {
     struct event_data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.type = 2; // DELETE
+    data.type = 2; 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->pathname);
     if (data.fname[0] == 0) return 0;
@@ -43,13 +43,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_unlinkat) {
 TRACEPOINT_PROBE(syscalls, sys_enter_renameat) {
     struct event_data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.type = 3; // RENAME
+    data.type = 3; 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
-    
-    // CRITICAL: We read the 'newname' (destination), not 'oldname'
-    // This captures the final artifact name.
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), (void *)args->newname);
-    
     if (data.fname[0] == 0) return 0;
     events.perf_submit(args, &data, sizeof(data));
     return 0;
@@ -73,7 +69,7 @@ class EBPFTracer:
         self.event_types = {1: "OPEN", 2: "DELETE", 3: "RENAME"}
 
     def start_trace(self, root_pid, target_name=""):
-        print(f"[+] Compiling eBPF (Rename-Aware Mode)...")
+        print(f"[+] Compiling eBPF (Chrome Optimized)...")
         self.bpf = BPF(text=bpf_source)
         self.bpf["events"].open_perf_buffer(self._process_event)
         self.running = True
@@ -86,27 +82,29 @@ class EBPFTracer:
         filename = event.fname.decode('utf-8', 'ignore')
         proc_name = event.comm.decode('utf-8', 'ignore').lower()
 
-        # --- FILTER LOGIC ---
-        # Whitelist User Directories
+        # --- CHROME WHITELIST FILTER ---
         is_interesting = False
+        
+        # 1. User Data Locations
         if filename.startswith("/home"): is_interesting = True
         if filename.startswith("/root"): is_interesting = True
         if filename.startswith("/tmp"):  is_interesting = True
         
-        # Blacklist Self-Noise
-        if "fuzzer_debug" in filename or "__pycache__" in filename or "ui_tree" in filename:
+        # 2. Capture Chrome Profile Activity explicitly
+        # This catches History, Cookies, Cache even if hidden
+        if "chrome_fuzz_profile" in filename or "google-chrome" in filename:
+            is_interesting = True
+            
+            # NOISE FILTER: Ignore high-frequency internal locks/caches
+            if any(x in filename for x in ["LOCK", "Singleton", "GPUCache", "ShaderCache", "blob_storage"]):
+                is_interesting = False
+
+        # 3. Global Blacklist (Self-noise)
+        if any(x in filename for x in ["__pycache__", "fuzzer_debug", "ui_tree", ".so", ".dat", "pipe"]):
             is_interesting = False
-        
-        # Special Case: Allow hidden files if they are in /tmp (might be temp writes)
-        # But ignore noisy hidden files elsewhere
-        if "/." in filename and not filename.startswith("/tmp"):
-             # Allow specific configs
-             if not any(x in filename for x in ["config", "local", "xbel"]):
-                 is_interesting = False
 
         if not is_interesting:
             return
-        # --------------------
 
         print(f"   [Trace] {proc_name} ({self.event_types.get(event.type)}) -> {filename}")
 

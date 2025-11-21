@@ -12,10 +12,18 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
 [*] Starting Orchestrator...
 [*] Starting Xvfb + Fluxbox on :99...
 [+] Compiling eBPF (Rename-Aware Mode)...
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/pyvenv.cfg
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/bin/python3._pth
    [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing
    [Trace] mousepad (OPEN) -> /root/.local/share/glib-2.0/schemas/gschemas.compiled
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
    [Trace] mousepad (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/pyvenv.cfg
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/lib/python3.12/site-packages
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/lib/python3.12/site-packages/google_generativeai-0.8.5-py3.13-nspkg.pth
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/lib/python3.12/site-packages
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/lib/python3.12/site-packages
+   [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/venv/lib/python3.12/site-packages/google_generativeai-0.8.5-py3.13-nspkg.pth
    [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/smart_tester.py
    [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/smart_tester.py
    [Trace] python3 (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui
@@ -25,12 +33,9 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
    [Trace] dbus-daemon (OPEN) -> /root/.local/share/dbus-1/services
    [Trace] python3 (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.local/share/gtksourceview-4/language-specs
-   [Trace] python3 (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.local/share/gtksourceview-4/styles
+   [Trace] python3 (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.local/share/Mousepad
-   [Trace] python3 (OPEN) -> /root/.local/share/glib-2.0/schemas/gschemas.compiled
-   [Trace] python3 (OPEN) -> /root/.config/dconf/user
-   [Trace] python3 (OPEN) -> /tmp/dogtail-root/logs/smart_tester_20251121-155507_debug
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//4c599c202bc5c08e2d34565a40eac3b2-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.fontconfig//4c599c202bc5c08e2d34565a40eac3b2-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//3830d5c3ddfd5cd38a049b759396e72e-le64.cache-9
@@ -47,6 +52,7 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
    [Trace] mousepad (OPEN) -> /root/.fontconfig//7ef2298fde41cc6eeb7af42e48b7d293-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//d82eb4fd963d448e2fcb7d7b793b5df3-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.fontconfig//d82eb4fd963d448e2fcb7d7b793b5df3-le64.cache-9
+   [Trace] python3 (OPEN) -> /root/.local/share/glib-2.0/schemas/gschemas.compiled
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//e13b20fdb08344e0e664864cc2ede53d-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.fontconfig//e13b20fdb08344e0e664864cc2ede53d-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//707971e003b4ae6c8121c3a920e507f5-le64.cache-9
@@ -79,6 +85,8 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
    [Trace] mousepad (OPEN) -> /root/.fontconfig//a4e60e8d1e10d2fdff3fe3037a1845fb-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.cache/fontconfig//6333f38776742d18e214673cd2c24e34-le64.cache-9
    [Trace] mousepad (OPEN) -> /root/.fontconfig//6333f38776742d18e214673cd2c24e34-le64.cache-9
+   [Trace] python3 (OPEN) -> /root/.config/dconf/user
+   [Trace] python3 (OPEN) -> /tmp/dogtail-root/logs/smart_tester_20251121-160631_debug
    [Trace] mousepad (OPEN) -> /root/.local/share/mime//aliases
    [Trace] mousepad (OPEN) -> /root/.local/share/mime//subclasses
    [Trace] mousepad (OPEN) -> /root/.local/share/mime//icons
@@ -90,10 +98,9 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
    [Trace] mousepad (OPEN) -> /root/.local/share/Mousepad
    [Trace] mousepad (OPEN) -> /root/.config/Mousepad/accels.scm
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.MDQWG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.S1EIG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
-   [Trace] mousepad (OPEN) -> /root/.config/dconf/user
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.2ZFYG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.OKOIG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
@@ -103,108 +110,90 @@ SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
    [Trace] mousepad (OPEN) -> /root/.config/user-dirs.dirs
    [Trace] mousepad (OPEN) -> /root/.config/gtk-3.0/servers
    [Trace] mousepad (OPEN) -> /root/.config/gtk-3.0/servers
+Creating logfile at /tmp/dogtail-root/logs/smart_tester_20251121-160631_debug ...
+Warning: AT-SPI's desktop is visible but it has no children. Are you running any AT-SPI-aware applications?
    [Trace] mousepad (OPEN) -> /root/.config/gtk-3.0/bookmarks
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
+   [Trace] pool (OPEN) -> /home/junyeong/DAFuzzing
    [Trace] pool-mousepad (OPEN) -> /home/junyeong/DAFuzzing
-   [Trace] pool-mousepad (OPEN) -> /home/junyeong/DAFuzzing
    [Trace] pool-mousepad (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
-   [Trace] pool-mousepad (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
-   [Trace] pool-mousepad (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
+   [Trace] pool (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
+   [Trace] pool (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
+   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/test.txt
+   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/.git/config
+   [Trace] git (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/radamsa/.git/config
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] pool-mousepad (OPEN) -> /tmp
    [Trace] pool-mousepad (OPEN) -> /tmp/.X99-lock
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/test.txt
-Creating logfile at /tmp/dogtail-root/logs/smart_tester_20251121-155507_debug ...
-Warning: AT-SPI's desktop is visible but it has no children. Are you running any AT-SPI-aware applications?
-   [Trace] git (OPEN) -> /home/junyeong/.config/git/attributes
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/test.txt
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/.git/config
-   [Trace] git (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/radamsa/.git/config
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] mousepad (OPEN) -> /root/.local/share/recently-used.xbel.NMUJG3
-   [Trace] mousepad (OPEN) -> /root/.local/share
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.V66LG3
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.YTDMG3
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf
-   [Trace] mousepad (OPEN) -> /root/.local/share/recently-used.xbel.6NQRG3
-   [Trace] mousepad (OPEN) -> /root/.local/share
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] mousepad (OPEN) -> /root/.config/dconf/user
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.DL3VG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.962SG3
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
+   [Trace] mousepad (OPEN) -> /root/.local/share/recently-used.xbel.HU9SG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.2W9SG3
+   [Trace] mousepad (OPEN) -> /root/.local/share
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] mousepad (OPEN) -> /root/.local/share/recently-used.xbel
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-FREWG3
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.SXHWG3
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.P2XWG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.CSPHG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] git (OPEN) -> /home/junyeong/.config/git/attributes
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-QD1FG3
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.4YJHG3
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-QZFJG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.3NIJG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.BW0HG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.68DIG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/run_pipeline.py
-   [Trace] git (OPEN) -> /home/junyeong/.config/git/attributes
-   [Trace] (sd-rmrf) (OPEN) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-2wsSQf
-   [Trace] (sd-rmrf) (OPEN) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-2wsSQf
-   [Trace] (sd-rmrf) (DELETE) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-2wsSQf
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/artifact_6891.txt
-   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-DF5KG3
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.6I8KG3
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-UFXMG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.AA0MG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
-   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.ZBNLG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.8XUOG3
    [Trace] dconf-service (OPEN) -> /root/.config/dconf
    [Trace] mousepad (OPEN) -> /root/.config/dconf/user
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-1
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/get-docker.sh
    [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
-   [Trace] git (OPEN) -> /home/junyeong/.config/git/attributes
+   [Trace] (sd-rmrf) (OPEN) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-KMNrtG
+   [Trace] (sd-rmrf) (OPEN) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-KMNrtG
+   [Trace] (sd-rmrf) (DELETE) -> /tmp/systemd-private-81a019136ae94b69ba34e18fdf028a10-systemd-hostnamed.service-KMNrtG
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/artifact_8383.txt
+   [Trace] mousepad (OPEN) -> /tmp/.goutputstream-RQATG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.D13RG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] mousepad (OPEN) -> /root/.config/dconf/user
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf/user.CJFSG3
+   [Trace] dconf-service (OPEN) -> /root/.config/dconf
+   [Trace] mousepad (OPEN) -> /root/.config/dconf/user
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-0
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-0
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-0
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/.goutputstream-MW1VG3
+   [Trace] xdotool (OPEN) -> /tmp/.Xauthority_xvfb_99
    [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/test.txt
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/.git/config
-   [Trace] git (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/radamsa/.git/config
-   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-1
-   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-1
-   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/.goutputstream-ACLEG3
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/get-docker.sh
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/core
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/experiment_data
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/experiment_data/Mousepad_1763740502
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/core/tracer
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/.git/config
-   [Trace] git (OPEN) -> /home/junyeong/DAFuzzing/core/fuzzing/gui/radamsa/.git/config
-   [Trace] libuv-worker (OPEN) -> /home/junyeong/DAFuzzing/test_stack.sh
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-0
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/autosave-0
+   [Trace] pool-mousepad (OPEN) -> /root/.local/share/Mousepad/.goutputstream-OD1VG3
 [*] Display Environment Stopped
