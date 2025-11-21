@@ -5,9 +5,11 @@ __pycache__/
 
 # C extensions
 *.so
+*.sh
 
 # Distribution / packaging
 .Python
+__pycache__/
 build/
 develop-eggs/
 dist/
@@ -19,6 +21,7 @@ lib64/
 parts/
 sdist/
 var/
+venv/
 wheels/
 share/python-wheels/
 *.egg-info/
