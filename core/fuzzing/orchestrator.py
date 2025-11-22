@@ -26,20 +26,33 @@ class ArtifactDiscoverySession:
         self.app_name = app_name
         self.duration = duration
         self.output_dir = os.path.join(output_dir, f"{app_name}_{int(time.time())}")
-        
-        self.tracer = EBPFTracer()
+        self.chrome_user_dir = f"/tmp/chrome_fuzz_profile_{int(time.time())}_{os.getpid()}"
+
+        self.tracer = EBPFTracer(
+            interest_patterns=[
+                self.chrome_user_dir,
+                "/home", 
+                "/tmp"
+            ],
+            ignore_patterns=[
+                "__pycache__", ".so", ".pyc", "/dev/", 
+                "/proc/", ".so", "LOCK", "Singleton", "GPUCache"
+            ]
+        )
         self.extractor = MetadataExtractor()
         self.proc: Optional[subprocess.Popen] = None
+        self.fuzzer_proc: Optional[subprocess.Popen] = None
         self.ipc_server = FeedbackServer()
         self.all_events = [] 
-        self.chrome_user_dir = ""
         
         os.makedirs(self.output_dir, exist_ok=True)
 
     def _setup_inputs(self):
         logger.info("[Phase 0] Setting up environment...")
         # Chrome requires a dedicated user data dir to avoid messing up local profiles
-        self.chrome_user_dir = f"/tmp/chrome_fuzz_profile_{int(time.time())}"
+
+        if os.path.exists(self.chrome_user_dir):
+            shutil.rmtree(self.chrome_user_dir, ignore_errors=True)
         os.makedirs(self.chrome_user_dir, exist_ok=True)
 
     def run(self):
@@ -47,74 +60,120 @@ class ArtifactDiscoverySession:
         self._setup_inputs()
         self.ipc_server.start()
 
-        with XvfbDisplay(display_id=99) as xvfb:
+        # 해상도 확보
+        with XvfbDisplay(display_id=99, res="1920x1080x24") as xvfb:
             logger.info("[Phase 1] Initializing eBPF Tracer...")
-            # Start tracing, target 'chrome' specifically for filtering
+            
+            # Tracer 시작
             self.tracer.start_trace(root_pid=0, target_name="chrome") 
             time.sleep(2) 
             
-            # Append critical Chrome flags
+            # --- Chrome 실행 명령어 구성 ---
             cmd = self.target_cmd.copy()
-            # Check if command is likely Chrome/Chromium
+            
             if any(x in cmd[0] for x in ["google-chrome", "chromium", "chrome"]):
+                logger.info("Detected Chrome/Chromium target. Injecting instrumentation flags...")
                 cmd.extend([
                     "--no-sandbox", 
                     "--disable-gpu", 
-                    "--force-renderer-accessibility", # CRITICAL for Dogtail to see DOM
-                    f"--user-data-dir={self.chrome_user_dir}",
+                    "--disable-dev-shm-usage",
+                    "--force-renderer-accessibility", 
+                    "--window-size=1920,1080",
+                    "--start-maximized",
+                    "--window-position=0,0",
                     "--no-first-run",
                     "--no-default-browser-check",
-                    "--disable-dev-shm-usage" # Fix crashes in containers
+                    "--disable-infobars",
+                    "--disable-session-crashed-bubble",
+                    "--disable-popup-blocking",
+                    f"--user-data-dir={self.chrome_user_dir}"
                 ])
 
-            logger.info(f"[Phase 2] Launching: {' '.join(cmd)}")
+            logger.info(f"[Phase 2] Launching Target: {' '.join(cmd)}")
+            
+            # 환경변수 설정
+            target_env = os.environ.copy()
+            target_env["GTK_MODULES"] = "gail:atk-bridge" 
+            target_env["NO_AT_BRIDGE"] = "0"
+            target_env["PYTHONPATH"] = os.getcwd() # 현재 경로를 파이썬 경로로 추가
+
             try:
                 self.proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                     preexec_fn=os.setsid,
-                    env=os.environ
+                    env=target_env
                 )
             except FileNotFoundError:
-                logger.error("Target executable not found!")
+                logger.error(f"Target executable not found: {cmd[0]}")
                 self.tracer.stop_trace()
                 return
 
-            logger.info("[Phase 3] Starting Smart Fuzzer...")
+            time.sleep(3)
+            if self.proc.poll() is not None:
+                logger.error("[-] Target application crashed immediately!")
+                self._cleanup()
+                return
+
+            logger.info("[Phase 3] Starting Smart Fuzzer (GUI Tester)...")
+            
+            # --- [수정된 부분] 경로 계산 및 실행 (중복 코드 제거됨) ---
             import sys
             current_python = sys.executable
             
-            fuzz_thread = subprocess.Popen(
-                [current_python, "core/fuzzing/gui/smart_tester.py", self.app_name], 
-                env=os.environ.copy(),
-                stdout=None,
-                stderr=None
+            # 1. 절대 경로 계산
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # 2. smart_tester.py 위치 찾기 (우선순위: gui 폴더 내부 -> 현재 폴더)
+            fuzzer_script = os.path.join(current_dir, "gui", "smart_tester.py")
+            if not os.path.exists(fuzzer_script):
+                fuzzer_script = os.path.join(current_dir, "smart_tester.py")
+            
+            # 3. 디버깅 로그 출력
+            logger.info(f"[DEBUG] Final Fuzzer Path: {fuzzer_script}")
+
+            if not os.path.exists(fuzzer_script):
+                logger.error(f"[-] FATAL: Fuzzer script NOT found at {fuzzer_script}")
+                self._cleanup()
+                return
+
+            self.fuzzer_proc = subprocess.Popen(
+                [current_python, fuzzer_script, self.app_name, str(self.duration)], 
+                env=target_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
             
-            logger.info(f"[Phase 3] Fuzzing for {self.duration} seconds...")
+            logger.info(f"[Phase 3] Fuzzing in progress for {self.duration} seconds...")
             start_time = time.time()
             total_artifacts = 0
             
-            while time.time() - start_time < self.duration:
-                if self.proc.poll() is not None:
-                    logger.warning("Target application crashed or exited early!")
-                    break
-                
-                # Drain events from tracer and store persistently
-                new_events = self.tracer.get_events()
-                if new_events:
-                    self.all_events.extend(new_events)
-                    total_artifacts += len(new_events)
-                    logger.info(f"[+] Total Artifacts Discovered: {total_artifacts}")
-                    self.ipc_server.update_count(total_artifacts)
+            try:
+                while time.time() - start_time < self.duration:
+                    if self.proc.poll() is not None:
+                        logger.warning("[-] Target application exited early.")
+                        break
+                    
+                    if self.fuzzer_proc.poll() is not None:
+                        logger.error("[-] Fuzzer process died! Check stderr.")
+                        out, err = self.fuzzer_proc.communicate()
+                        if err: logger.error(f"Fuzzer Stderr: {err.decode()}")
+                        break
 
-                time.sleep(1)
-            
+                    new_events = self.tracer.get_events()
+                    if new_events:
+                        self.all_events.extend(new_events)
+                        total_artifacts += len(new_events)
+                        if total_artifacts % 10 == 0:
+                            logger.info(f"[+] Total Artifacts Discovered: {total_artifacts}")
+                        self.ipc_server.update_count(total_artifacts)
+
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Interrupted by user.")
+
             logger.info("[Phase 4] Stopping experiment...")
-            self.ipc_server.stop()
-            self.tracer.stop_trace()
-            if fuzz_thread: fuzz_thread.terminate()
             self._cleanup()
 
         self._analyze_results()

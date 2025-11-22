@@ -5,6 +5,14 @@ import os
 import subprocess
 from core.fuzzing.ipc import FeedbackClient
 
+# Dogtail 라이브러리 안전 로딩
+try:
+    import dogtail.tree
+    import dogtail.rawinput
+    from dogtail.config import config
+except ImportError:
+    pass
+
 class SmartFuzzer:
     def __init__(self, app_name, duration=60):
         self.app_name = app_name
@@ -12,49 +20,31 @@ class SmartFuzzer:
         self.logger = logging.getLogger("SmartFuzzer")
         self.feedback = FeedbackClient()
         self.last_score = 0
-        logging.basicConfig(filename='/tmp/fuzzer_debug.log', level=logging.INFO)
+        
+        # 로깅 설정
+        logging.basicConfig(
+            filename='/tmp/fuzzer_debug.log', 
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
         
         self.app_node = None
         self.running = False
         
-        global dogtail, config
-        import dogtail.tree
-        import dogtail.rawinput
-        from dogtail.config import config
-        
-        config.defaultDelay = 1.5
-        config.searchCutoffCount = 20
+        # Dogtail 설정
+        if 'dogtail' in globals():
+            config.defaultDelay = 0.5
+            config.searchCutoffCount = 10
 
     def xdo(self, args):
         try: subprocess.run(["xdotool"] + args, check=False)
         except: pass
-
-    def get_window_id(self):
-        try:
-            # Chrome windows usually contain "Google Chrome" in the title
-            out = subprocess.check_output(
-                ["xdotool", "search", "--onlyvisible", "--name", self.app_name],
-                stderr=subprocess.DEVNULL
-            ).decode().strip()
-            if not out: return None
-            # If multiple windows (e.g. tooltips), grab the last created one
-            return out.split('\n')[-1]
-        except: return None
-
-    def focus_app(self):
-        wid = self.get_window_id()
-        if wid:
-            self.xdo(["windowactivate", "--sync", wid])
-            return True
-        return False
 
     def connect(self):
         self.logger.info(f"[*] SmartFuzzer looking for app: {self.app_name}")
         start_wait = time.time()
         while time.time() - start_wait < 30:
             try:
-                # Connect via Accessibility Bus
-                # Chrome usually registers as "Google Chrome"
                 target_lower = self.app_name.lower()
                 for app in dogtail.tree.root.applications():
                     if target_lower in app.name.lower():
@@ -65,52 +55,40 @@ class SmartFuzzer:
             except: time.sleep(1)
         return False
 
-    def populate_content(self):
-        """
-        Interacts with the browser page to create history/cache artifacts.
-        """
-        self.logger.info("[Action] Interacting with Browser Page...")
-        if self.focus_app():
-            # 1. Click center of page (content area)
-            self.xdo(["mousemove", "960", "540", "click", "1"])
-            time.sleep(0.5)
-            
-            # 2. Focus URL Bar (Ctrl+L) and navigate
-            self.xdo(["key", "ctrl+l"])
-            time.sleep(0.5)
-            # Use a data URI to create content without needing internet
-            self.xdo(["type", "data:text/html,<h1>Forensic Evidence</h1><p>Test Artifact</p>"])
-            self.xdo(["key", "Return"])
-            time.sleep(3) # Wait for page load/render
-
-    def blind_save_workflow(self):
-        """
-        Triggers Ctrl+S to save the webpage.
-        """
+    def robust_save_workflow(self):
         fname = f"/tmp/artifact_{random.randint(1000,9999)}.html"
-        self.logger.info(f"[Action] Safe Save Workflow for {fname}")
+        self.logger.info(f"[Action] Robust Save Workflow for {fname}")
         self.last_score = self.feedback.get_artifact_count()
 
-        if not self.focus_app(): return
+        try:
+            # 1. 저장 단축키 (Ctrl+S)
+            self.xdo(["key", "ctrl+s"])
+            
+            # 2. 대화상자 대기
+            save_dialog = self.app_node.child(roleName="dialog", retry=True)
+            if not save_dialog: return
 
-        # 1. Trigger Save
-        self.xdo(["key", "ctrl+s"])
-        time.sleep(2.5) # Chrome dialog might be slower to appear
+            # 3. 파일명 입력
+            text_entry = save_dialog.child(roleName="text", retry=False)
+            text_entry.text = fname
+            time.sleep(0.5)
 
-        # 2. Type Filename (Blindly overwriting default)
-        self.logger.info("    -> Typing Filename...")
-        self.xdo(["type", "--delay", "100", fname])
-        time.sleep(1.0)
+            # 4. 저장 버튼 클릭
+            save_dialog.child(roleName="push button", name="Save").click()
+            
+            # 5. 덮어쓰기 팝업 처리
+            time.sleep(1)
+            try:
+                confirm = self.app_node.child(roleName="alert", retry=False)
+                if confirm: confirm.button("Replace").click()
+            except: pass
 
-        # 3. Save & Confirm
-        self.logger.info("    -> Pressing Enter...")
-        self.xdo(["key", "Return"])
-        time.sleep(1.0)
-        self.xdo(["key", "Return"]) # Confirm overwrite
+            time.sleep(2)
+            self.check_feedback("Save Workflow")
 
-        time.sleep(2) # Wait for download/save
-        if self.check_feedback("Save Workflow"):
-            self.logger.info(">> Fuzzer confirmed artifacts created!")
+        except Exception as e:
+            self.logger.error(f"[-] Workflow Failed: {e}")
+            self.xdo(["key", "Escape"])
 
     def check_feedback(self, action_name):
         current_score = self.feedback.get_artifact_count()
@@ -125,17 +103,35 @@ class SmartFuzzer:
         if not self.connect(): return
         self.running = True
         
-        self.populate_content()
-        
+        # 초기 콘텐츠 생성
+        self.xdo(["key", "ctrl+l"])
+        time.sleep(0.5)
+        self.xdo(["type", "data:text/html,<h1>Test</h1>"])
+        self.xdo(["key", "Return"])
+        time.sleep(2)
+
         start_time = time.time()
         while time.time() - start_time < self.duration:
-            self.blind_save_workflow()
-            # Chrome might need more time between saves
-            time.sleep(5) 
+            self.robust_save_workflow()
+            time.sleep(3) 
 
 if __name__ == "__main__":
     import sys
-    # Default to Google Chrome if run directly
+    
+    # 1. 앱 이름 받기
     app = sys.argv[1] if len(sys.argv) > 1 else "Google Chrome"
-    fuzzer = SmartFuzzer(app, duration=60)
+    
+    # 2. [수정] 지속 시간(Duration) 받기
+    try:
+        duration_arg = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+    except ValueError:
+        duration_arg = 60
+        
+    # Dogtail 초기화
+    import dogtail.tree
+    import dogtail.rawinput
+    from dogtail.config import config
+    
+    # 전달받은 시간으로 실행
+    fuzzer = SmartFuzzer(app, duration=duration_arg)
     fuzzer.start()
