@@ -64,6 +64,41 @@ class MetadataExtractor:
                 "mime_type": "error"
             }
 
+    def calculate_forensic_score(self, filepath: str) -> float:
+        """
+        파일의 경로, 확장자, 엔트로피를 기반으로 '포렌식 가치 점수'를 즉시 계산합니다.
+        실시간 피드백을 위해 무거운 작업(SHA256 등)은 생략합니다.
+        """
+        score = 1.0 # 기본 점수 (발견함)
+        
+        if not os.path.exists(filepath):
+            return 0.5 # 생성되었으나 즉시 삭제됨 (Transient) -> 낮은 점수
+            
+        try:
+            # 1. 키워드 분석 (High Value Targets)
+            path_lower = filepath.lower()
+            high_value_keywords = [
+                "history", "login", "password", "credential", "token", "cookie", 
+                "session", "preferences", "local state", "wallet", "secret", "key"
+            ]
+            if any(kw in path_lower for kw in high_value_keywords):
+                score += 50.0
+
+            # 2. 확장자/유형 분석 (Structured Data)
+            if any(path_lower.endswith(ext) for ext in [".db", ".sqlite", ".json", ".xml", ".conf", ".ini"]):
+                score += 20.0
+            
+            # 3. 엔트로피 분석 (Information Density)
+            # 파일 앞부분만 읽어서 빠르게 계산
+            entropy = self._calculate_entropy(filepath, limit=2048)
+            if entropy > 5.0:
+                score += 10.0
+            
+            return score
+            
+        except:
+            return 1.0 # 에러 시 기본 점수만 부여
+
     def _get_sha256(self, filepath: str) -> str:
         sha = hashlib.sha256()
         try:
@@ -73,11 +108,11 @@ class MetadataExtractor:
             return sha.hexdigest()
         except: return "hash_error"
 
-    def _calculate_entropy(self, filepath: str) -> float:
+    def _calculate_entropy(self, filepath: str, limi: int = 4096) -> float:
         import math
         try:
             with open(filepath, 'rb') as f:
-                data = f.read(4096)
+                data = f.read(limit)
             if not data: return 0.0
             entropy = 0
             for x in range(256):

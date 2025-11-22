@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections import defaultdict
 from core.fuzzing.ipc import FeedbackClient
 
 # Dogtail 로딩
@@ -24,16 +25,16 @@ class IntelligentFuzzer:
         self.last_score = 0
         self.last_action = None
         
-        # [UI State Tracking] - 여기가 핵심입니다.
-        self.visited_states = set()  # 방문한 상태들의 집합 (해시 저장)
+        # [State Tracking v2] 방문 횟수 카운트
+        self.state_visits = defaultdict(int)
         self.current_ui_hash = "INIT"
         
-        # Q-Table (행동 확장됨)
+        # Q-Table
         self.q_values = {
             "targeted_click": 10.0,
             "random_click": 2.0,
-            "nav_tab": 5.0,       # [NEW] 탭 이동 (탐험용)
-            "nav_escape": 5.0,    # [NEW] 뒤로 가기 (탈출용)
+            "nav_tab": 5.0,
+            "nav_escape": 5.0,
             "hotkey_save": 5.0,
             "hotkey_print": 5.0,
             "hotkey_history": 5.0,
@@ -63,7 +64,6 @@ class IntelligentFuzzer:
         except: pass
 
     def _learn_from_dpkg(self):
-        # (기존 dpkg 로직 유지 - 생략하지 말고 그대로 두세요)
         self.logger.info("[RL-Init] Learning from Static Analysis (dpkg)...")
         try:
             pkg_name = "google-chrome-stable" if "chrome" in self.app_name.lower() else self.app_name.lower()
@@ -79,7 +79,6 @@ class IntelligentFuzzer:
         except: pass
 
     def connect(self):
-        # (기존 connect 로직 유지)
         start_wait = time.time()
         while time.time() - start_wait < 30:
             try:
@@ -93,37 +92,16 @@ class IntelligentFuzzer:
             except: time.sleep(1)
         return False
 
-    # --- [NEW] UI State Identification ---
     def get_current_ui_state(self):
-        """
-        현재 UI 상태를 식별하는 고유 문자열(Hash)을 반환합니다.
-        정의: [활성 윈도우 이름] :: [포커스된 요소의 역할]
-        """
         try:
-            # 1. 현재 활성화된 윈도우/다이얼로그 찾기
-            active_window = "UnknownWindow"
-            # Dogtail로 최상위 윈도우 스캔
-            for child in self.app_node.children:
-                if child.roleName in ['frame', 'dialog', 'alert'] and child.showing:
-                    active_window = child.name
-                    break
-            
-            # 2. 포커스된 요소 찾기 (너무 깊게 탐색하면 느려지므로 주의)
-            # 간단하게 xdotool로 윈도우 타이틀만 가져오는게 빠를 수 있음
             win_title = subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"], stderr=subprocess.DEVNULL).decode().strip()
-            
-            # 상태 정의: 윈도우 제목만으로도 충분히 강력한 State 구분이 됨
-            # (예: "Settings - Chrome", "Save File", "Print")
             state_hash = f"WIN:[{win_title}]"
             return state_hash
-            
         except:
             return "STATE_UNKNOWN"
 
-    # --- Expanded Actions ---
-
+    # --- Actions ---
     def act_navigation(self):
-        """[NEW] 탭 키를 눌러 포커스를 이동 (새로운 요소 탐색)"""
         keys = ["Tab", "Right", "Down"]
         k = random.choice(keys)
         self.xdo(["key", k])
@@ -131,13 +109,11 @@ class IntelligentFuzzer:
         return True
 
     def act_escape(self):
-        """[NEW] Esc 키를 눌러 팝업 닫기 (State 탈출)"""
         self.xdo(["key", "Escape"])
         self.logger.info(f"[Action] Escape State")
         return True
 
     def act_targeted_click(self):
-        # (기존 코드 유지)
         targets = []
         if not self.app_node: return False
         try:
@@ -157,13 +133,11 @@ class IntelligentFuzzer:
         return False
 
     def act_random_click(self):
-        # (기존 코드 유지)
         w, h = 1920, 1080
         self.xdo(["mousemove", str(random.randint(0, w)), str(random.randint(0, h)), "click", "1"])
         return True
 
     def act_hotkey(self, key_type):
-        # (기존 코드 유지)
         key_map = {
             "hotkey_save": (['ctrl', 's'], "Save"),
             "hotkey_print": (['ctrl', 'p'], "Print"),
@@ -183,7 +157,7 @@ class IntelligentFuzzer:
             self.xdo(["key", "Return"])
         return True
 
-    # --- RL Logic (Modified) ---
+    # --- RL Logic (Improved) ---
 
     def choose_action(self):
         if random.random() < self.epsilon:
@@ -196,21 +170,16 @@ class IntelligentFuzzer:
         self.logger.info(f"[RL-Policy] Exploiting: {best_action} (Score: {self.q_values[best_action]:.1f})")
         return best_action
 
-    def update_q_table(self, reward, state_bonus=0):
-        """
-        [Novelty] 보상 = 아티팩트 생성 + 새로운 상태 발견 보너스
-        """
+    def update_q_table(self, reward):
         if not self.last_action: return
         
         old_q = self.q_values.get(self.last_action, 0.0)
         
-        # 총 보상 계산
-        total_reward = (reward * 10.0) + state_bonus
-        
-        new_q = old_q + self.alpha * total_reward
+        # 학습률 적용 (Q-Value Update)
+        new_q = old_q + self.alpha * reward
         self.q_values[self.last_action] = new_q
         
-        self.logger.info(f"[RL-Learn] {self.last_action} -> Reward: {total_reward} (New Q: {new_q:.1f})")
+        self.logger.info(f"[RL-Learn] {self.last_action} -> Reward: {reward:.1f} (New Q: {new_q:.1f})")
 
     def perform_action(self, action_name):
         if action_name == "targeted_click":
@@ -232,42 +201,58 @@ class IntelligentFuzzer:
         # 초기화
         self.xdo(["key", "ctrl+l"])
         time.sleep(0.5)
-        self.xdo(["type", "data:text/html,<h1>RL State Fuzzing</h1>"])
+        self.xdo(["type", "data:text/html,<h1>RL v2</h1>"])
         self.xdo(["key", "Return"])
         time.sleep(2)
+
+        # [FIX 1] 시작 전 점수 동기화 (초기 대박 방지)
+        self.last_score = self.feedback.get_artifact_count()
+        self.logger.info(f"[Init] Baseline Score Synced: {self.last_score}")
 
         start_time = time.time()
         while time.time() - start_time < self.duration:
             
-            # 1. 현재 상태 파악
+            # 1. 현재 상태 파악 & 페널티 계산
             current_state = self.get_current_ui_state()
-            state_bonus = 0.0
+            self.state_visits[current_state] += 1
+            visit_count = self.state_visits[current_state]
             
-            # [Research Value] 새로운 상태 발견 시 강력한 보상 제공
-            if current_state != "STATE_UNKNOWN" and current_state not in self.visited_states:
-                self.logger.info(f"[!!!] NEW STATE DISCOVERED: {current_state}")
-                self.visited_states.add(current_state)
-                state_bonus = 50.0 # 아티팩트 5개분량의 보상
+            state_reward = 0.0
+            
+            # [FIX 2] 상태 보상 체계 개선 (Decay)
+            if current_state != "STATE_UNKNOWN":
+                if visit_count == 1:
+                    self.logger.info(f"[!!!] NEW STATE DISCOVERED: {current_state}")
+                    state_reward = 50.0 # 신규 발견 보너스
+                else:
+                    # 이미 방문한 곳은 점점 페널티 (정체 방지)
+                    # 많이 방문할수록 더 큰 페널티 (-1, -2, -3...)
+                    state_reward = -1.0 * (visit_count - 1)
             
             # 2. 아티팩트 보상 계산
             current_score = self.feedback.get_artifact_count()
             delta = current_score - self.last_score
             self.last_score = current_score
             
+            artifact_reward = 0.0
             if delta > 0:
                 self.logger.info(f"[!!!] I/O REWARD: +{delta} Artifacts")
+                artifact_reward = delta * 10.0
+            else:
+                # [FIX 3] 소득이 없으면 행동 비용 부과
+                artifact_reward = -2.0 
             
-            # 3. 학습 (아티팩트 + 상태 보너스)
-            if delta > 0 or state_bonus > 0:
-                self.update_q_table(delta, state_bonus)
+            # 3. 학습 (이전 행동에 대한 평가)
+            total_reward = artifact_reward + state_reward
+            self.update_q_table(total_reward)
             
             # 4. 행동 수행
             action = self.choose_action()
             self.last_action = action
             self.perform_action(action)
             
-            # 5. 상태 기록용 로그 (나중에 그래프 그리기 위함)
-            self.logger.info(f"[State-Metric] Total Visited States: {len(self.visited_states)}")
+            # 5. 상태 기록
+            self.logger.info(f"[State-Metric] Total Visited States: {len(self.state_visits)}")
             
             time.sleep(2)
 
