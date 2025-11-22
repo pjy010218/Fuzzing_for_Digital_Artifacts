@@ -7,6 +7,8 @@ __pycache__/
 *.so
 *.sh
 *.json
+*.txt
+*.png
 
 # Distribution / packaging
 .Python
