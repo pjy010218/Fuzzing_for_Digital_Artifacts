@@ -124,11 +124,14 @@ class ArtifactDiscoverySession:
             
             # 1. 절대 경로 계산
             current_dir = os.path.dirname(os.path.abspath(__file__))
+
+            # 환경 변수 FUZZER_SCRIPT가 설정된 경우 해당 스크립트 사용
+            target_script_name = os.environ.get("FUZZER_SCRIPT", "smart_tester.py")
             
             # 2. smart_tester.py 위치 찾기 (우선순위: gui 폴더 내부 -> 현재 폴더)
-            fuzzer_script = os.path.join(current_dir, "gui", "smart_tester.py")
+            fuzzer_script = os.path.join(current_dir, "gui", target_script_name)
             if not os.path.exists(fuzzer_script):
-                fuzzer_script = os.path.join(current_dir, "smart_tester.py")
+                fuzzer_script = os.path.join(current_dir, target_script_name)
             
             # 3. 디버깅 로그 출력
             logger.info(f"[DEBUG] Final Fuzzer Path: {fuzzer_script}")
@@ -172,6 +175,14 @@ class ArtifactDiscoverySession:
                     time.sleep(1)
             except KeyboardInterrupt:
                 logger.info("Interrupted by user.")
+
+            logger.info("[*] Draining remaining events from tracer...")
+            final_events = self.tracer.get_events()
+            if final_events:
+                self.all_events.extend(final_events)
+                total_artifacts += len(final_events)
+                logger.info(f"[+] Final Total Artifacts Discovered: {total_artifacts}")
+                self.ipc_server.update_count(total_artifacts)
 
             logger.info("[Phase 4] Stopping experiment...")
             self._cleanup()

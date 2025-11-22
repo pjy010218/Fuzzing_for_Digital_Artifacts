@@ -207,7 +207,8 @@ class IntelligentFuzzer:
         self.running = True
         
         # 정적 분석 수행
-        self._learn_from_dpkg()
+        # self._learn_from_dpkg()
+        self.logger.info("[Baseline] Random Fuzzer Started. (No Knowledge Base, No RL Used)")
         
         # 초기 콘텐츠 생성
         self.xdo(["key", "ctrl+l"])
@@ -220,22 +221,24 @@ class IntelligentFuzzer:
         while time.time() - start_time < self.duration:
             
             # 1. 이전 행동에 대한 보상 계산
-            current_score = self.feedback.get_artifact_count()
-            delta = current_score - self.last_score
+            # current_score = self.feedback.get_artifact_count()
+            # delta = current_score - self.last_score
             
-            if delta > 0:
-                self.logger.info(f"[!!!] REWARD: +{delta} Artifacts created!")
-                self.update_q_table(delta)
+            # if delta > 0:
+            #     self.logger.info(f"[!!!] REWARD: +{delta} Artifacts created!")
+            #     self.update_q_table(delta)
             
-            self.last_score = current_score
+            # self.last_score = current_score
             
             # 2. 다음 행동 선택 (RL)
-            action = self.choose_action()
-            self.last_action = action
+            # action = self.choose_action()
+            # self.last_action = action
             
             # 3. 행동 수행
-            self.perform_action(action)
-            
+            # self.perform_action(action)
+
+            self.act_random_click()
+            self.logger.info("[Action] Random Click (Baseline Mode)")
             time.sleep(2) # 반응 대기
 
 if __name__ == "__main__":
