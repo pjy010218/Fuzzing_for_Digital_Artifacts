@@ -98,7 +98,9 @@ class EBPFTracer:
                             빈 문자열이면 모든 프로세스를 감시하되 필터링만 적용.
         """
         logger.info(f"[+] Compiling eBPF (Target: {target_name if target_name else 'ALL'})...")
-        self.target_comm = target_name.lower() if target_name else None
+        # Linux kernel truncates process names (comm) to 16 chars (15 + null).
+        # We must truncate our target name to match what eBPF sees.
+        self.target_comm = target_name.lower()[:15] if target_name else None
         
         try:
             self.bpf = BPF(text=bpf_source)

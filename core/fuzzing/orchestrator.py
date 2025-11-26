@@ -190,6 +190,10 @@ class ArtifactDiscoverySession:
             if "DBUS_SESSION_BUS_ADDRESS" in os.environ:
                 target_env["DBUS_SESSION_BUS_ADDRESS"] = os.environ["DBUS_SESSION_BUS_ADDRESS"]
 
+            # [Robustness] Pass unique log path to fuzzer
+            self.fuzzer_log_path = os.path.join(self.output_dir, "fuzzer_debug.log")
+            target_env["FUZZER_LOG_PATH"] = self.fuzzer_log_path
+
             # 앱 특화 플래그 (Chrome/Firefox 등)
             if "chrome" in self.app_name.lower():
                  user_dir_flag = self.config.get("user_dir_flag", "--user-data-dir")
@@ -205,6 +209,10 @@ class ArtifactDiscoverySession:
                  pass
 
             logger.info(f"[Phase 2] Launching Target: {' '.join(cmd)}")
+
+            if not cmd:
+                logger.error("[-] No binary command found for target. Aborting.")
+                return
 
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid, env=target_env)
@@ -299,7 +307,9 @@ class ArtifactDiscoverySession:
         events = self.all_events
         
         actions = []
-        log_path = "/tmp/fuzzer_debug.log"
+        actions = []
+        # Use the log path defined in run() or default to legacy path if not found
+        log_path = getattr(self, 'fuzzer_log_path', "/tmp/fuzzer_debug.log")
         
         import re
         from datetime import datetime

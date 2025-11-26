@@ -2,11 +2,14 @@ import time
 import random
 import logging
 import os
+import hashlib
 import subprocess
 import sys
 import json
 from collections import defaultdict
 from core.fuzzing.ipc import FeedbackClient
+
+from core.fuzzing.gui.actions.library import FuzzerActions
 
 # Dogtail 라이브러리 안전 로딩
 try:
@@ -28,36 +31,39 @@ class IntelligentFuzzer:
         self.last_score = 0
         self.last_action = None
         self.state_visits = defaultdict(int)
-        
-        # [UI Exploration Memory]
-        # 방문한 요소의 해시를 저장하여 중복 클릭 방지 (Exploration 유도)
         self.interacted_elements = set()
-        
+        self.current_ui_hash = "INIT"
+
         # [Config]
         self.target_config = {}
         self._load_config(config_path)
+        
+        # [Refactor] Initialize Actions Library
+        self.actions = FuzzerActions(self)
         
         # Q-Table (행동 확장)
         self.q_values = {
             "ui_crawl": 10.0,      # [NEW] UI 요소 탐색 및 클릭
             "ui_input": 8.0,       # [NEW] 텍스트 입력 시도
+            "menu_exploration": 12.0,# [NEW] 메뉴 열기 및 항목 클릭
             "nav_tab": 5.0,
             "nav_escape": 5.0,
-            "random_click": 2.0
+            "random_click": 3.0
         }
         # 핫키 추가
         if self.target_config:
             for action_name in self.target_config.get("actions", {}):
                 self.q_values[action_name] = 5.0
 
-        self.epsilon = 0.3 
-        self.alpha = 0.5
+        self.epsilon = 0.5 
+        self.alpha = 0.4
         self.knowledge_base = set()
         self.app_node = None
         self.running = False
         
+        log_path = os.environ.get("FUZZER_LOG_PATH", f"/tmp/fuzzer_debug_{os.getpid()}.log")
         logging.basicConfig(
-            filename='/tmp/fuzzer_debug.log', 
+            filename=log_path, 
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
@@ -66,8 +72,8 @@ class IntelligentFuzzer:
             config.searchCutoffCount = 10
 
     def xdo(self, args):
-        try: subprocess.run(["xdotool"] + args, check=False)
-        except: pass
+        # Proxy to actions library for compatibility if needed, or remove if unused internally
+        self.actions.xdo(args)
 
     def _load_config(self, path):
         """설정 파일 로드"""
@@ -77,8 +83,12 @@ class IntelligentFuzzer:
                 path = os.path.join(os.path.dirname(__file__), "../../../", path)
             
             if os.path.exists(path):
-                with open(path, 'r') as f:
-                    full_config = json.load(f)
+                try:
+                    with open(path, 'r') as f:
+                        full_config = json.load(f)
+                except json.JSONDecodeError:
+                    self.logger.error(f"[-] Invalid JSON in config: {path}")
+                    return
                 # 앱 이름 매칭 (Google Chrome -> google-chrome)
                 normalized_name = self.app_name.lower().replace(" ", "-")
                 for key, cfg in full_config.items():
@@ -110,6 +120,10 @@ class IntelligentFuzzer:
         except: pass
 
     def connect(self):
+        if 'dogtail' not in globals():
+            self.logger.error("[-] Dogtail library not loaded. Cannot connect to UI.")
+            return False
+
         self.logger.info(f"[*] SmartFuzzer looking for app: {self.app_name}")
         
         # [DEBUG] 찾고자 하는 이름 출력
@@ -147,176 +161,56 @@ class IntelligentFuzzer:
                 time.sleep(1)
             
         self.logger.error(f"[-] Failed to find app '{self.app_name}' in UI tree.")
-        print(f"[-] TIMEOUT: Could not find '{self.app_name}'. Last seen apps: {visible_apps}", file=sys.stderr)
-        return False
-            
-        self.logger.error(f"[-] Failed to find app '{self.app_name}' in UI tree.")
+        if 'visible_apps' in locals():
+            print(f"[-] TIMEOUT: Could not find '{self.app_name}'. Last seen apps: {visible_apps}", file=sys.stderr)
         return False
 
     def get_current_ui_state(self):
+        state_str = ""
         try:
+            # 1. 윈도우 제목
             win_title = subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"], stderr=subprocess.DEVNULL).decode().strip()
-            return f"WIN:[{win_title}]"
-        except: return "STATE_UNKNOWN"
-
-    def _get_interactable_elements(self):
-        """현재 화면에서 클릭/입력 가능한 모든 요소를 수집하고 점수를 매깁니다."""
-        candidates = []
-        if not self.app_node: return []
-
-        try:
-            # 현재 활성화된 윈도우/다이얼로그 하위만 검색 (성능 최적화)
-            active_window = self.app_node.child(roleName='frame', recursive=False) # 메인 프레임
-            # 팝업이 있으면 팝업 우선
-            for child in self.app_node.children:
-                if child.roleName == 'dialog' and child.showing:
-                    active_window = child
-                    break
+            state_str += f"TITLE:{win_title}|"
             
-            if not active_window: active_window = self.app_node
-
-            # 재귀 검색 (깊이 제한 필요할 수 있음)
-            # Dogtail의 findChildren은 느릴 수 있으므로 roleName으로 필터링
-            # 관심 Role: menu, push button, page tab, text, combo box, check box
-            interesting_roles = ['menu', 'push button', 'page tab', 'text', 'combo box', 'check box', 'menu item']
-            
-            for node in active_window.findChildren(lambda x: x.roleName in interesting_roles and x.showing, recursive=True):
-                name = node.name.lower() if node.name else ""
-                role = node.roleName
+            # 2. UI 트리 해싱 (성능 고려하여 깊이 제한)
+            if self.app_node:
+                active_window = self.app_node.child(roleName='frame', recursive=False)
+                if not active_window: active_window = self.app_node
                 
-                # 점수 계산 (Scoring)
-                score = 1.0
+                elements = []
+                # 메뉴나 팝업이 떠있는지 확인하는 것이 중요
+                for node in active_window.findChildren(lambda x: x.roleName in ['menu', 'dialog', 'alert'] and x.showing, recursive=True):
+                    elements.append(f"{node.roleName}:{node.name}")
                 
-                # 1. Knowledge Base 매칭 (높은 점수)
-                if any(k in name for k in self.knowledge_base):
-                    score += 10.0
+                elements.sort()
+                state_str += "|".join(elements)
                 
-                # 2. Action Verb 매칭 (중간 점수)
-                if any(v in name for v in ["save", "ok", "apply", "next", "yes", "print"]):
-                    score += 5.0
-                
-                # 3. Novelty (처음 보는 요소면 가산점)
-                node_hash = f"{name}_{role}_{node.position}"
-                if node_hash not in self.interacted_elements:
-                    score += 5.0
-                else:
-                    score -= 2.0 # 이미 눌러본 건 감점
+            return hashlib.md5(state_str.encode('utf-8')).hexdigest()
+        except:
+            return "STATE_UNKNOWN"
 
-                candidates.append((node, score, node_hash))
-                
-        except: pass
+    def wait_for_state_change(self, old_state_hash, timeout=2.0):
+        """
+        [Dynamic Wait]
+        이전 상태 해시(old_state_hash)와 현재 상태 해시를 비교하여,
+        화면이 바뀌었으면 즉시 리턴하고, 안 바뀌었으면 최대 timeout까지 기다립니다.
+        """
+        start_time = time.time()
+        check_interval = 0.5 # UI 트리 탐색 부하를 고려해 간격을 0.5초로 설정
         
-        # 점수 높은 순 정렬
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates
-
-    def act_ui_crawl(self):
-        """[NEW] 화면 분석 후 가장 유망한 요소 클릭"""
-        candidates = self._get_interactable_elements()
-        
-        if not candidates:
-            self.logger.info("[Crawl] No interactable elements found.")
-            return False
-        
-        # Top 3 중 하나 랜덤 선택 (탐험성 유지)
-        target, score, node_hash = random.choice(candidates[:3])
-        
-        try:
-            self.logger.info(f"[Action] UI Crawl -> Clicking '{target.name}' ({target.roleName}) [Score: {score}]")
+        while time.time() - start_time < timeout:
+            current_hash = self.get_current_ui_state()
             
-            # 클릭 수행
-            target.click()
-            self.interacted_elements.add(node_hash)
+            if current_hash != old_state_hash:
+                # 상태 변화 감지! 
+                # UI가 안정화될 시간을 아주 조금만 더 줍니다 (렌더링 완료 대기)
+                time.sleep(0.2)
+                return current_hash
             
-            # 메뉴 아이템이었다면 닫힐 때까지 잠시 대기
-            if target.roleName == 'menu':
-                time.sleep(0.5)
-                
-            return True
-        except Exception as e:
-            self.logger.warning(f"[Crawl] Interaction failed: {e}")
-            return False
-
-    def act_ui_input(self):
-        """[NEW] 입력창을 찾아 포렌식적으로 유의미한 텍스트 주입"""
-        try:
-            # 텍스트 필드 찾기
-            text_fields = self.app_node.findChildren(lambda x: x.roleName == 'text' and x.showing, recursive=True)
-            if not text_fields: return False
-            
-            target = random.choice(text_fields)
-            self.logger.info(f"[Action] UI Input -> Typing into '{target.name}'")
-            
-            # 포커스 후 입력
-            target.grabFocus()
-            time.sleep(0.2)
-            
-            # 입력할 문자열 (URL, 검색어 등)
-            payloads = ["file:///etc/passwd", "search_history", "http://malicious.com", "secret_password"]
-            text = random.choice(payloads)
-            
-            self.xdo(["type", text])
-            self.xdo(["key", "Return"])
-            return True
-        except: return False
-
-    # --- Actions ---
-    def act_navigation(self):
-        keys = ["Tab", "Right", "Down"]
-        k = random.choice(keys)
-        self.xdo(["key", k])
-        self.logger.info(f"[Action] Navigation -> {k}")
-        return True
-
-    def act_escape(self):
-        self.xdo(["key", "Escape"])
-        self.logger.info(f"[Action] Escape State")
-        return True
-
-    def act_targeted_click(self):
-        targets = []
-        if not self.app_node: return False
-        try:
-            for child in self.app_node.findChildren(recursive=True):
-                if child.roleName in ["push button", "menu", "menu item", "page tab"]:
-                    name = child.name.lower() if child.name else ""
-                    if any(k in name for k in self.knowledge_base):
-                        targets.append(child)
-        except: pass
-        if targets:
-            t = random.choice(targets)
-            try:
-                t.click()
-                self.logger.info(f"[Action] Targeted Click -> '{t.name}'")
-                return True
-            except: return False
-        return False
-
-    def act_random_click(self):
-        w, h = 1920, 1080
-        self.xdo(["mousemove", str(random.randint(0, w)), str(random.randint(0, h)), "click", "1"])
-        return True
-
-    def act_hotkey(self, action_name):
-        """설정 파일 기반 핫키 주입"""
-        actions = self.target_config.get("actions", {})
-        if action_name not in actions:
-            return False
+            time.sleep(check_interval)
         
-        combo_data = actions[action_name] # [["ctrl", "s"], "Description"]
-        keys = combo_data[0]
-        desc = combo_data[1]
-        
-        self.xdo(["key"] + ([f"{'+'.join(keys)}"]))
-        self.logger.info(f"[Action] Hotkey Injection -> {desc}")
-        
-        time.sleep(1.0)
-        # 팝업 승인 (엔터)
-        if 's' in keys or 'p' in keys or 'delete' in keys:
-            self.xdo(["key", "Return"])
-            time.sleep(0.5)
-            self.xdo(["key", "Return"])
-        return True
+        # 타임아웃: 상태가 변하지 않음 (변화가 없는 행동이었거나 로딩이 매우 느림)
+        return old_state_hash
 
     # --- RL Logic ---
     def choose_action(self):
@@ -339,15 +233,21 @@ class IntelligentFuzzer:
 
     def perform_action(self, action_name):
         if action_name == "targeted_click":
-            if not self.act_targeted_click(): self.act_random_click()
+            if not self.actions.act_targeted_click(): self.actions.act_random_click()
         elif action_name == "random_click":
-            self.act_random_click()
+            self.actions.act_random_click()
         elif action_name == "nav_tab":
-            self.act_navigation()
+            self.actions.act_navigation()
         elif action_name == "nav_escape":
-            self.act_escape()
+            self.actions.act_escape()
+        elif action_name == "ui_crawl":
+            if not self.actions.act_ui_crawl(): self.actions.act_random_click()
+        elif action_name == "ui_input":
+            if not self.actions.act_ui_input(): self.actions.act_random_click()
+        elif action_name == "menu_exploration":
+            if not self.actions.act_menu_exploration(): self.actions.act_random_click()
         else:
-            self.act_hotkey(action_name)
+            self.actions.act_hotkey(action_name)
 
     def start(self):
         if not self.connect(): return
@@ -365,8 +265,27 @@ class IntelligentFuzzer:
         self.logger.info(f"[Init] Score Synced: {self.last_score}")
 
         start_time = time.time()
+        current_state = self.get_current_ui_state()
+        
+        # [RL Parameter] 초기값 및 최소값 설정
+        initial_epsilon = 0.5
+        min_epsilon = 0.05
+        
         while time.time() - start_time < self.duration:
-            current_state = self.get_current_ui_state()
+            # -------------------------------------------------------
+            # [NEW] Adaptive Epsilon: 시간에 따라 선형 감소 (Linear Decay)
+            # -------------------------------------------------------
+            elapsed = time.time() - start_time
+            progress = elapsed / self.duration  # 0.0 (시작) ~ 1.0 (종료)
+            
+            # 공식: 시작할 때 0.5 -> 끝날 때 0.05로 서서히 감소
+            self.epsilon = max(min_epsilon, initial_epsilon - ((initial_epsilon - min_epsilon) * progress))
+            
+            # 디버깅용: 현재 엡실론 값 로깅 (선택 사항)
+            # self.logger.info(f"[RL-Param] Epsilon: {self.epsilon:.2f}")
+            # -------------------------------------------------------
+
+            # 1. 상태 방문 체크 및 보상
             self.state_visits[current_state] += 1
             visit_count = self.state_visits[current_state]
             
@@ -378,6 +297,7 @@ class IntelligentFuzzer:
                 else:
                     state_reward = -1.0 * (visit_count - 1)
 
+            # 2. 아티팩트 보상
             current_score = self.feedback.get_artifact_count()
             delta = current_score - self.last_score
             self.last_score = current_score
@@ -387,13 +307,15 @@ class IntelligentFuzzer:
             
             self.update_q_table(artifact_reward + state_reward)
             
+            # 3. 행동 수행
             action = self.choose_action()
             self.last_action = action
             self.perform_action(action)
             
-            self.logger.info(f"[Stats] States: {len(self.state_visits)} | Explored Nodes: {len(self.interacted_elements)}")
+            self.logger.info(f"[Stats] States: {len(self.state_visits)} | Nodes: {len(self.interacted_elements)}")
             
-            time.sleep(2)
+            # 4. 스마트 대기
+            current_state = self.wait_for_state_change(current_state, timeout=2.0)
 
 if __name__ == "__main__":
     # (기존과 동일한 인자 처리)
