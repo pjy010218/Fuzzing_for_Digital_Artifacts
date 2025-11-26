@@ -13,55 +13,61 @@ class FuzzerActions:
         except: pass
 
     def _get_interactable_elements(self):
-        """BFS로 탐색하여 상호작용 가능한 요소를 찾습니다. (Debugging Enhanced)"""
+        """BFS로 탐색하여 상호작용 가능한 요소를 찾습니다. (Debugging Enhanced & Depth Limited)"""
         candidates = []
         if not self.fuzzer.app_node: 
             self.logger.warning("[Crawl-Debug] App node is None!")
             return []
 
         try:
-            # 1. 활성 윈도우 찾기 디버깅
-            active_window = self.fuzzer.app_node.child(roleName='frame', recursive=False)
-            
-            # 팝업 우선 검색
-            popup_found = False
-            for child in self.fuzzer.app_node.children:
-                if child.roleName in ['dialog', 'window', 'alert'] and child.showing:
-                    active_window = child
-                    popup_found = True
-                    self.logger.info(f"[Crawl-Debug] Focused on POPUP: {child.name}")
-                    break
-            
-            if not active_window: 
-                active_window = self.fuzzer.app_node
-                self.logger.info("[Crawl-Debug] No active window found, using App Root.")
-            elif not popup_found:
-                self.logger.info(f"[Crawl-Debug] Focused on Main Window: {active_window.name}")
+            # [FIX] 활성 윈도우 찾기 로직 단순화
+            active_window = self.fuzzer.app_node
 
-            # 2. BFS 탐색 디버깅
-            target_roles = ['push button', 'menu', 'menu item', 'page tab', 'text', 'check box', 
-                           'radio button', 'combo box', 'toggle button', 'panel', 'icon', 'label']
+            # BFS 탐색 (깊이 제한: 3)
+            queue = [(active_window, 0)]
+            visited = set()
             
-            # [FIX 2] showing=True 조건 제거 (Firefox 버그 대응)
-            for node in active_window.findChildren(lambda x: x.roleName in target_roles, recursive=True):
-                
-                # [FIX 3] 좌표 기반 필터링 (화면 밖 요소 제외)
+            # Electron 전용 Role 포함
+            target_roles = ['push button', 'menu', 'menu item', 'page tab', 'text', 'check box', 
+                           'radio button', 'combo box', 'toggle button', 'panel', 'icon', 'label',
+                           'document web', 'section', 'heading', 'link', 'entry', 'paragraph', 
+                           'group', 'list', 'list item']
+            
+            # [FIX] 최대 노드 스캔 수 제한 (무한 루프 방지)
+            scan_limit = 200
+            scanned_count = 0
+
+            while queue and scanned_count < scan_limit:
+                node, depth = queue.pop(0)
+                if node in visited: continue
+                visited.add(node)
+                scanned_count += 1
+
+                # 후보 등록
                 try:
-                    x, y = node.position
-                    w, h = node.size
-                    # 화면 영역 (1920x1080) 안에 있고 크기가 0이 아니면 유효
-                    if x < 0 or y < 0 or w <= 0 or h <= 0: continue
-                    if x > 1920 or y > 1080: continue
-                except: continue
-                
-                name = node.name.lower() if node.name else ""
-                score = 1.0
-                
-                # 점수 로직 동일
-                if any(k in name for k in self.fuzzer.knowledge_base): score += 10.0
-                
-                candidates.append((node, score, f"{name}_{node.roleName}_{node.position}"))
-        except: pass
+                    if node.roleName in target_roles:
+                        # 좌표 기반 필터링 (화면 밖 요소 제외)
+                        try:
+                            x, y = node.position
+                            w, h = node.size
+                            # 화면 영역 (1920x1080) 안에 있고 크기가 0이 아니면 유효
+                            if x >= 0 and y >= 0 and w > 0 and h > 0 and x <= 1920 and y <= 1080:
+                                name = node.name.lower() if node.name else ""
+                                score = 1.0
+                                if any(k in name for k in self.fuzzer.knowledge_base): score += 10.0
+                                candidates.append((node, score, f"{name}_{node.roleName}_{node.position}"))
+                        except: pass
+                except: pass # Node 접근 에러 무시
+
+                # [FIX] 깊이 제한을 3으로 설정 (Discord UI는 매우 깊음)
+                if depth < 3:
+                    try:
+                        for child in node.children:
+                            queue.append((child, depth + 1))
+                    except: pass
+                    
+        except Exception as e:
+            self.logger.error(f"UI Scan Error: {e}")
         
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates
@@ -143,6 +149,40 @@ class FuzzerActions:
             self.xdo(["type", text])
             self.xdo(["key", "Return"])
             return True
+        except: return False
+
+    def act_dialog_handler(self):
+        """
+        [Robustness] 대화상자(Dialog)가 떴을 때 이를 '해결'하는 전용 로직
+        """
+        try:
+            # 현재 윈도우가 Dialog인지 확인
+            active = self.fuzzer.app_node.child(roleName='dialog', recursive=False)
+            if not active or not active.showing: return False
+            
+            self.logger.info("[Action] Dialog Handler Triggered!")
+            
+            # 1. 텍스트 필드가 있다면 무조건 채운다 (파일명 등)
+            text_fields = active.findChildren(lambda x: x.roleName == 'text', recursive=True)
+            for tf in text_fields:
+                if tf.showing:
+                    tf.grabFocus()
+                    self.xdo(["type", "fuzz_artifact.txt"])
+                    time.sleep(0.5)
+                    
+            # 2. 긍정 버튼(Save/OK)을 찾아 누른다 (또는 엔터)
+            # Gedit은 헤더바에 버튼이 있을 수 있음
+            buttons = active.findChildren(lambda x: x.roleName == 'push button', recursive=True)
+            for btn in buttons:
+                if any(k in btn.name.lower() for k in ['save', 'ok', 'open', 'create']):
+                    self.logger.info(f"    -> Clicking positive button: {btn.name}")
+                    btn.click()
+                    return True
+            
+            # 버튼 못 찾았으면 엔터로 마무리
+            self.xdo(["key", "Return"])
+            return True
+            
         except: return False
 
     # --- Actions ---

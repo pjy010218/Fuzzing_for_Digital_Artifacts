@@ -46,6 +46,7 @@ class IntelligentFuzzer:
             "ui_crawl": 10.0,      # [NEW] UI 요소 탐색 및 클릭
             "ui_input": 8.0,       # [NEW] 텍스트 입력 시도
             "menu_exploration": 12.0,# [NEW] 메뉴 열기 및 항목 클릭
+            "dialog_handler": 15.0, # [NEW] 대화상자 처리 (높은 우선순위)
             "nav_tab": 5.0,
             "nav_escape": 5.0,
             "random_click": 3.0
@@ -166,24 +167,17 @@ class IntelligentFuzzer:
         return False
 
     def get_current_ui_state(self):
-        state_str = ""
         try:
-            # 1. 윈도우 제목
+            # 1. 윈도우 제목 (가장 안전함)
             win_title = subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"], stderr=subprocess.DEVNULL).decode().strip()
-            state_str += f"TITLE:{win_title}|"
+            state_str = f"TITLE:{win_title}"
             
-            # 2. UI 트리 해싱 (성능 고려하여 깊이 제한)
+            # 2. UI 트리 해싱 (타임아웃 설정)
+            # Electron 앱에서는 이 부분이 너무 느리면 생략하거나 깊이를 1~2로 제한해야 함
             if self.app_node:
-                active_window = self.app_node.child(roleName='frame', recursive=False)
-                if not active_window: active_window = self.app_node
-                
-                elements = []
-                # 메뉴나 팝업이 떠있는지 확인하는 것이 중요
-                for node in active_window.findChildren(lambda x: x.roleName in ['menu', 'dialog', 'alert'] and x.showing, recursive=True):
-                    elements.append(f"{node.roleName}:{node.name}")
-                
-                elements.sort()
-                state_str += "|".join(elements)
+                # [FIX] 재귀 탐색 대신 직계 자식만 확인하거나 깊이 제한
+                # (여기서는 간단히 제목만 사용하도록 변경하여 안정성 확보)
+                pass 
                 
             return hashlib.md5(state_str.encode('utf-8')).hexdigest()
         except:
@@ -210,7 +204,52 @@ class IntelligentFuzzer:
             time.sleep(check_interval)
         
         # 타임아웃: 상태가 변하지 않음 (변화가 없는 행동이었거나 로딩이 매우 느림)
+        # 타임아웃: 상태가 변하지 않음 (변화가 없는 행동이었거나 로딩이 매우 느림)
         return old_state_hash
+
+    def verify_login_state(self):
+        criteria = self.target_config.get("validation_ui")
+        if not criteria: return True # 검증 조건 없으면 패스
+        
+        self.logger.info("[Check] Verifying login state...")
+        
+        # [Optimization] 전체 앱 트리 대신 활성 윈도우(Frame) 내에서만 검색
+        search_root = self.app_node
+        try:
+            # Frame 찾기 (보통 앱의 직계 자식)
+            frames = self.app_node.findChildren(roleName='frame', recursive=False)
+            if not frames:
+                # 직계 자식에 없으면 조금 더 깊게 검색
+                frames = self.app_node.findChildren(roleName='frame', recursive=True)
+            
+            # 가장 큰 윈도우나 첫 번째 윈도우 선택
+            if frames:
+                search_root = frames[0]
+                self.logger.info(f"[Check] Search Scope Narrowed: {search_root.name} (Role: {search_root.roleName})")
+        except: pass
+
+        # 30초간 UI 요소 검색 (로딩 시간 고려하여 증가)
+        start = time.time()
+        while time.time() - start < 30:
+            try:
+                # search_root에서 검색
+                target = search_root.child(roleName=criteria['roleName'], name=criteria['name'], recursive=True)
+                if target and target.showing:
+                    self.logger.info("[Check] Login Verification PASSED.")
+                    return True
+            except: pass
+            time.sleep(1)
+            
+        self.logger.error("[Check] Login Verification FAILED. Element not found.")
+        
+        # [DEBUG] 실패 시 현재 보이는 요소들 로깅 (search_root 기준)
+        try:
+            self.logger.info(f"[DEBUG] Dumping children of {search_root.roleName} for debugging:")
+            for child in search_root.children:
+                self.logger.info(f" - Role: {child.roleName}, Name: {child.name}, Showing: {child.showing}")
+        except: pass
+        
+        return False
 
     # --- RL Logic ---
     def choose_action(self):
@@ -246,11 +285,19 @@ class IntelligentFuzzer:
             if not self.actions.act_ui_input(): self.actions.act_random_click()
         elif action_name == "menu_exploration":
             if not self.actions.act_menu_exploration(): self.actions.act_random_click()
+        elif action_name == "dialog_handler":
+            if not self.actions.act_dialog_handler(): self.actions.act_random_click()
         else:
             self.actions.act_hotkey(action_name)
 
     def start(self):
         if not self.connect(): return
+        
+        # [NEW] 로그인 상태 검증
+        if not self.verify_login_state():
+            self.logger.error("[-] ABORTING: Target app is not in logged-in state.")
+            return # 실험 중단
+
         self.running = True
         self._learn_from_dpkg()
         

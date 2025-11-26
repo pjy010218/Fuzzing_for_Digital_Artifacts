@@ -47,7 +47,10 @@ class ArtifactDiscoverySession:
         if target_state_file:
             self._load_target_state(target_state_file)
 
-        self.chrome_user_dir = f"/tmp/chrome_fuzz_profile_{int(time.time())}_{os.getpid()}"
+        # [Persistent Profile] Use a fixed path for profiles to allow manual login
+        base_profile_dir = os.path.abspath("./profiles")
+        os.makedirs(base_profile_dir, exist_ok=True)
+        self.chrome_user_dir = os.path.join(base_profile_dir, f"{app_name}_profile")
         
         # Tracer 설정
         target_proc = self.config.get("process_name", app_name.lower())
@@ -129,10 +132,13 @@ class ArtifactDiscoverySession:
             self.targets_config = []
 
     def _setup_inputs(self):
-        logger.info("[Phase 0] Setting up environment...")
-        if os.path.exists(self.chrome_user_dir):
-            shutil.rmtree(self.chrome_user_dir, ignore_errors=True)
-        os.makedirs(self.chrome_user_dir, exist_ok=True)
+        logger.info(f"[Phase 0] Using Persistent Profile at: {self.chrome_user_dir}")
+        # [Persistent Profile] Do NOT delete existing profile. Only create if missing.
+        if not os.path.exists(self.chrome_user_dir):
+            os.makedirs(self.chrome_user_dir, exist_ok=True)
+            logger.info("Created new profile directory.")
+        else:
+            logger.info("Resuming with existing profile data.")
 
     def calculate_reward(self, new_events):
         total_score = 0.0
@@ -178,8 +184,73 @@ class ArtifactDiscoverySession:
             self.tracer.start_trace(root_pid=0, target_name=target_proc) 
             time.sleep(2) 
             
-            # 실행 명령어 구성
-            cmd = self.config.get("binary_cmd", []).copy()
+    def _launch_target(self, target_env):
+        # 실행 명령어 구성
+        cmd = self.config.get("binary_cmd", []).copy()
+        
+    def _launch_target(self, target_env):
+        # 실행 명령어 구성
+        cmd = self.config.get("binary_cmd", []).copy()
+        
+        # 앱 특화 플래그 (Chrome/Firefox/Electron 등)
+        is_electron = self.config.get("is_electron", False) or \
+                      any(k in self.app_name.lower() for k in ["chrome", "code", "discord", "electron"])
+        
+        if is_electron:
+             # Electron/Chromium 공통 필수 플래그
+             user_dir_flag = self.config.get("user_dir_flag", "--user-data-dir")
+             
+             # 이미 플래그가 있는지 확인 후 추가
+             if "--no-sandbox" not in cmd: cmd.append("--no-sandbox")
+             if "--disable-gpu" not in cmd: cmd.append("--disable-gpu")
+             if "--force-renderer-accessibility" not in cmd: cmd.append("--force-renderer-accessibility")
+             
+             # User Data Dir은 별도 처리
+             if user_dir_flag and not any(user_dir_flag in c for c in cmd):
+                 cmd.append(f"{user_dir_flag}={self.chrome_user_dir}")
+                 
+        elif "firefox" in self.app_name.lower():
+                pass
+        else:
+                pass
+
+        logger.info(f"[Phase 2] Launching Target: {' '.join(cmd)}")
+
+        if not cmd:
+            logger.error("[-] No binary command found for target. Aborting.")
+            return None
+
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid, env=target_env)
+            return proc
+        except FileNotFoundError:
+            logger.error(f"Target executable not found: {cmd[0]}")
+            return None
+
+    def _launch_fuzzer(self, target_env):
+        logger.info("[Phase 3] Starting Smart Fuzzer...")
+        
+        fuzzer_script_name = os.environ.get("FUZZER_SCRIPT", "smart_tester.py")
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        fuzzer_path = os.path.join(current_dir, "gui", fuzzer_script_name)
+        if not os.path.exists(fuzzer_path): fuzzer_path = os.path.join(current_dir, fuzzer_script_name)
+
+        return subprocess.Popen(
+            [sys.executable, fuzzer_path, self.app_name, str(self.duration), self.runtime_config_path], 
+            env=target_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+
+    def run(self):
+        logger.info(f"[*] Starting Session for {self.app_name}")
+        self._setup_inputs()
+        self.ipc_server.start()
+
+        with XvfbDisplay(display_id=99, res="1920x1080x24") as xvfb:
+            logger.info("[Phase 1] Initializing eBPF Tracer...")
+            
+            target_proc = self.config.get("process_name", "chrome")
+            self.tracer.start_trace(root_pid=0, target_name=target_proc) 
+            time.sleep(2) 
             
             # 환경변수 설정
             target_env = os.environ.copy()
@@ -194,56 +265,13 @@ class ArtifactDiscoverySession:
             self.fuzzer_log_path = os.path.join(self.output_dir, "fuzzer_debug.log")
             target_env["FUZZER_LOG_PATH"] = self.fuzzer_log_path
 
-            # 앱 특화 플래그 (Chrome/Firefox 등)
-            if "chrome" in self.app_name.lower():
-                 user_dir_flag = self.config.get("user_dir_flag", "--user-data-dir")
-                 cmd.extend(["--no-sandbox", "--disable-gpu", "--force-renderer-accessibility", "--no-first-run"])
-                 cmd.append(f"{user_dir_flag}={self.chrome_user_dir}")
-            elif "firefox" in self.app_name.lower():
-                 # Firefox 설정은 target_config.json에 이미 독립형 경로가 있다고 가정하거나
-                 # auto-discovery된 경로 사용. 추가 플래그만 붙임.
-                 # (이미 config에 binary_cmd가 완성되어 있으면 그대로 둠)
-                 pass
-            else:
-                 # 일반 앱 (vscode, gedit 등)은 그냥 실행
-                 pass
+            # Initial Launch
+            self.proc = self._launch_target(target_env)
+            if not self.proc: return
 
-            logger.info(f"[Phase 2] Launching Target: {' '.join(cmd)}")
-
-            if not cmd:
-                logger.error("[-] No binary command found for target. Aborting.")
-                return
-
-            try:
-                self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid, env=target_env)
-            except FileNotFoundError:
-                logger.error(f"Target executable not found: {cmd[0]}")
-                return
-
-            time.sleep(5) # 앱 실행 대기 (좀 더 넉넉하게)
+            time.sleep(5) # 앱 실행 대기
             
-            logger.info("[Phase 3] Starting Smart Fuzzer...")
-            
-            # [FIX] 생성된 런타임 설정을 Fuzzer에게 전달해야 함
-            # 원래는 인자로 파일 경로를 줄 수 있지만, SmartTester 코드를 수정하지 않고
-            # 같은 폴더의 'target_config.json' 대신 'runtime_config.json'을 읽게 하려면
-            # SmartTester의 코드를 약간 수정하거나, 여기서 심볼릭 링크를 걸 수도 있음.
-            # 가장 깔끔한 건 SmartTester가 인자를 하나 더 받게 하는 것.
-            
-            fuzzer_script_name = os.environ.get("FUZZER_SCRIPT", "smart_tester.py")
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            fuzzer_path = os.path.join(current_dir, "gui", fuzzer_script_name)
-            if not os.path.exists(fuzzer_path): fuzzer_path = os.path.join(current_dir, fuzzer_script_name)
-
-            # Fuzzer 실행 (인자: 앱이름, 시간, 설정파일경로)
-            # 주의: 기존에는 3번째가 target_file이었는데, SmartTester는 config_path를 인자로 받도록 수정 필요.
-            # 하지만 SmartTester __init__을 보면 config_path="target_config.json"이 기본값.
-            # 따라서 SmartTester 코드를 조금 수정하여 argv[3]으로 config_path를 받게 해야 함.
-            
-            self.fuzzer_proc = subprocess.Popen(
-                [sys.executable, fuzzer_path, self.app_name, str(self.duration), self.runtime_config_path], 
-                env=target_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
+            self.fuzzer_proc = self._launch_fuzzer(target_env)
             
             start_time = time.time()
             total_score = 0.0
@@ -254,13 +282,36 @@ class ArtifactDiscoverySession:
                     if time.time() - start_time >= self.duration:
                         logger.info("[DEBUG] Loop exiting: Duration expired.")
                         break
+                    
+                    # [Self-Healing] Check Target Crash
                     if self.proc.poll() is not None:
-                        logger.warning("[-] Target application exited early.")
-                        break
+                        logger.warning(f"[CRASH DETECTED] Target '{self.app_name}' died! Initiating Recovery...")
+                        
+                        # 1. Kill Fuzzer
+                        if self.fuzzer_proc and self.fuzzer_proc.poll() is None:
+                            self.fuzzer_proc.terminate()
+                            self.fuzzer_proc.wait()
+                        
+                        # 2. Reset Environment
+                        self._setup_inputs()
+                        
+                        # 3. Relaunch Target
+                        self.proc = self._launch_target(target_env)
+                        if not self.proc:
+                            logger.error("[-] Failed to respawn target. Aborting.")
+                            break
+                        time.sleep(5)
+                        
+                        # 4. Relaunch Fuzzer
+                        self.fuzzer_proc = self._launch_fuzzer(target_env)
+                        logger.info("[Recovery] System restored.")
+
+                    # [Self-Healing] Check Fuzzer Crash
                     if self.fuzzer_proc.poll() is not None:
                         out, err = self.fuzzer_proc.communicate()
                         logger.error(f"[-] Fuzzer process died. Stderr: {err.decode() if err else 'None'}")
-                        break
+                        logger.info("[Recovery] Restarting Fuzzer only...")
+                        self.fuzzer_proc = self._launch_fuzzer(target_env)
 
                     new_events = self.tracer.get_events()
                     if new_events:
