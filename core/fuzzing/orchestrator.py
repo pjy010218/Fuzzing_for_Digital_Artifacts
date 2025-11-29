@@ -171,18 +171,6 @@ class ArtifactDiscoverySession:
                     break
             total_score += (base_score + target_bonus)
         return int(total_score)
-
-    def run(self):
-        logger.info(f"[*] Starting Session for {self.app_name}")
-        self._setup_inputs()
-        self.ipc_server.start()
-
-        with XvfbDisplay(display_id=99, res="1920x1080x24") as xvfb:
-            logger.info("[Phase 1] Initializing eBPF Tracer...")
-            
-            target_proc = self.config.get("process_name", "chrome")
-            self.tracer.start_trace(root_pid=0, target_name=target_proc) 
-            time.sleep(2) 
             
     def _launch_target(self, target_env):
         # 실행 명령어 구성
@@ -232,12 +220,26 @@ class ArtifactDiscoverySession:
         
         fuzzer_script_name = os.environ.get("FUZZER_SCRIPT", "smart_tester.py")
         current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # [CHECK 1] 경로 확인 로그 추가
         fuzzer_path = os.path.join(current_dir, "gui", fuzzer_script_name)
-        if not os.path.exists(fuzzer_path): fuzzer_path = os.path.join(current_dir, fuzzer_script_name)
+        if not os.path.exists(fuzzer_path): 
+            fuzzer_path = os.path.join(current_dir, fuzzer_script_name)
+        
+        if not os.path.exists(fuzzer_path):
+            logger.error(f"[-] Fuzzer script NOT FOUND at: {fuzzer_path}")
+            return None
 
+        # [CHECK 2] 실행 명령어 확인 로그
+        cmd = [sys.executable, fuzzer_path, self.app_name, str(self.duration), self.runtime_config_path]
+        logger.info(f"[DEBUG] Fuzzer CMD: {' '.join(cmd)}")
+
+        # [FIX] stdout도 PIPE로 연결
         return subprocess.Popen(
-            [sys.executable, fuzzer_path, self.app_name, str(self.duration), self.runtime_config_path], 
-            env=target_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            cmd, 
+            env=target_env, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
         )
 
     def run(self):
@@ -254,6 +256,7 @@ class ArtifactDiscoverySession:
             
             # 환경변수 설정
             target_env = os.environ.copy()
+            target_env["DISPLAY"] = ":99"
             target_env["GTK_MODULES"] = "gail:atk-bridge" 
             target_env["NO_AT_BRIDGE"] = "0"
             target_env["PYTHONPATH"] = os.getcwd()
@@ -261,6 +264,15 @@ class ArtifactDiscoverySession:
             if "DBUS_SESSION_BUS_ADDRESS" in os.environ:
                 target_env["DBUS_SESSION_BUS_ADDRESS"] = os.environ["DBUS_SESSION_BUS_ADDRESS"]
 
+            try:
+                subprocess.run(["killall", "at-spi-bus-launcher", "at-spi2-registryd"], stderr=subprocess.DEVNULL)
+                time.sleep(1)
+                # 백그라운드로 실행 (Orchestrator가 관리하지 않음)
+                subprocess.Popen(["/usr/libexec/at-spi-bus-launcher", "--launch-immediately"], env=target_env)
+                time.sleep(2)
+            except Exception as e:
+                logger.warning(f"[-] Failed to restart AT-SPI: {e}")
+                
             # [Robustness] Pass unique log path to fuzzer
             self.fuzzer_log_path = os.path.join(self.output_dir, "fuzzer_debug.log")
             target_env["FUZZER_LOG_PATH"] = self.fuzzer_log_path
@@ -307,9 +319,12 @@ class ArtifactDiscoverySession:
                         logger.info("[Recovery] System restored.")
 
                     # [Self-Healing] Check Fuzzer Crash
-                    if self.fuzzer_proc.poll() is not None:
+                    if self.fuzzer_proc and self.fuzzer_proc.poll() is not None:
                         out, err = self.fuzzer_proc.communicate()
-                        logger.error(f"[-] Fuzzer process died. Stderr: {err.decode() if err else 'None'}")
+                        logger.error(f"[-] Fuzzer process died.")
+                        logger.error(f"    Stdout: {out.decode() if out else 'None'}")
+                        logger.error(f"    Stderr: {err.decode() if err else 'None'}")
+                        
                         logger.info("[Recovery] Restarting Fuzzer only...")
                         self.fuzzer_proc = self._launch_fuzzer(target_env)
 

@@ -2,6 +2,7 @@ import time
 import random
 import subprocess
 import logging
+import sys
 
 class FuzzerActions:
     def __init__(self, fuzzer_instance):
@@ -13,64 +14,121 @@ class FuzzerActions:
         except: pass
 
     def _get_interactable_elements(self):
-        """BFS로 탐색하여 상호작용 가능한 요소를 찾습니다. (Debugging Enhanced & Depth Limited)"""
+        """[Ultra-Safe] BFS 탐색 (Recursive 제거)"""
         candidates = []
         if not self.fuzzer.app_node: 
             self.logger.warning("[Crawl-Debug] App node is None!")
             return []
 
         try:
-            # [FIX] 활성 윈도우 찾기 로직 단순화
+            # 1. 시작점: 활성 윈도우 찾기 (직계 자식만 검색)
+            print("[DEBUG-LIB] Finding active window...", file=sys.stderr)
             active_window = self.fuzzer.app_node
+            for child in self.fuzzer.app_node.children:
+                if child.roleName == 'frame':
+                    active_window = child
+                    break
+            
+            print(f"[DEBUG-LIB] Active window: {active_window.name if active_window else 'None'}", file=sys.stderr)
 
-            # BFS 탐색 (깊이 제한: 3)
+            # 2. 수동 BFS (recursive=True 사용 안 함)
             queue = [(active_window, 0)]
             visited = set()
             
-            # Electron 전용 Role 포함
-            target_roles = ['push button', 'menu', 'menu item', 'page tab', 'text', 'check box', 
-                           'radio button', 'combo box', 'toggle button', 'panel', 'icon', 'label',
-                           'document web', 'section', 'heading', 'link', 'entry', 'paragraph', 
-                           'group', 'list', 'list item']
+            # Electron 앱에서 유효한 Role들
+            target_roles = {'push button', 'menu', 'page tab', 'entry', 'link', 'document web', 'section', 'toggle button'}
             
-            # [FIX] 최대 노드 스캔 수 제한 (무한 루프 방지)
-            scan_limit = 200
+            scan_limit = 100 # 더 줄임 (안전 제일)
             scanned_count = 0
 
+            print("[DEBUG-LIB] Starting BFS loop...", file=sys.stderr)
             while queue and scanned_count < scan_limit:
-                node, depth = queue.pop(0)
-                if node in visited: continue
-                visited.add(node)
+                curr_node, depth = queue.pop(0)
+                
+                # 노드 식별자 생성 (Hashable하게)
+                try:
+                    node_id = (curr_node.name, curr_node.roleName, str(curr_node.position))
+                    if node_id in visited: continue
+                    visited.add(node_id)
+                except: continue
+                
                 scanned_count += 1
 
                 # 후보 등록
                 try:
-                    if node.roleName in target_roles:
-                        # 좌표 기반 필터링 (화면 밖 요소 제외)
-                        try:
-                            x, y = node.position
-                            w, h = node.size
-                            # 화면 영역 (1920x1080) 안에 있고 크기가 0이 아니면 유효
-                            if x >= 0 and y >= 0 and w > 0 and h > 0 and x <= 1920 and y <= 1080:
-                                name = node.name.lower() if node.name else ""
-                                score = 1.0
-                                if any(k in name for k in self.fuzzer.knowledge_base): score += 10.0
-                                candidates.append((node, score, f"{name}_{node.roleName}_{node.position}"))
-                        except: pass
-                except: pass # Node 접근 에러 무시
+                    role = curr_node.roleName
+                    if role in target_roles:
+                        # 좌표 유효성 체크
+                        x, y = curr_node.position
+                        w, h = curr_node.size
+                        if w > 0 and h > 0 and 0 <= x <= 1920 and 0 <= y <= 1080:
+                            name = curr_node.name.lower() if curr_node.name else ""
+                            score = 1.0
+                            if any(k in name for k in self.fuzzer.knowledge_base): score += 10.0
+                            
+                            candidates.append((curr_node, score, f"{name}_{role}_{x}_{y}"))
+                except: pass # 개별 노드 에러 무시
 
-                # [FIX] 깊이 제한을 3으로 설정 (Discord UI는 매우 깊음)
+                # 자식 노드 큐에 추가 (최대 깊이 3)
                 if depth < 3:
                     try:
-                        for child in node.children:
+                        # children 속성 접근 자체가 느릴 수 있으므로 타임아웃 고려 (여기선 try-except로 방어)
+                        for child in curr_node.children:
                             queue.append((child, depth + 1))
                     except: pass
+            
+            print(f"[DEBUG-LIB] Scan finished. Found {len(candidates)} candidates.", file=sys.stderr)
                     
         except Exception as e:
-            self.logger.error(f"UI Scan Error: {e}")
+            print(f"[DEBUG-LIB] Critical Error: {e}", file=sys.stderr)
+            self.logger.error(f"UI Scan Critical Error: {e}")
         
+        # 결과 반환
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates
+
+    def act_drag_and_drop(self):
+        """
+        [New Action] 요소를 클릭한 상태로 다른 위치로 드래그합니다.
+        파일 이동, 슬라이더 조작, 텍스트 블록 선택 등의 효과를 냅니다.
+        """
+        candidates = self._get_interactable_elements()
+        if not candidates: return False
+        
+        # 드래그 시작점 (Source) 선택
+        target, score, node_hash = random.choice(candidates[:5]) if len(candidates) > 5 else random.choice(candidates)
+        
+        try:
+            # 1. 시작 좌표 계산
+            x1, y1 = target.position
+            w, h = target.size
+            start_x = x1 + w // 2
+            start_y = y1 + h // 2
+            
+            # 2. 도착 좌표 계산 (Destination)
+            # 화면 내의 임의의 위치로 드래그 (또는 다른 요소 위로 드래그)
+            dest_x = random.randint(0, 1920)
+            dest_y = random.randint(0, 1080)
+            
+            self.logger.info(f"[Action] Drag & Drop -> '{target.name}' from ({start_x},{start_y}) to ({dest_x},{dest_y})")
+            
+            # 3. 드래그 수행 (xdotool 사용)
+            # mousemove (시작점) -> mousedown (1번버튼) -> mousemove (끝점) -> mouseup
+            self.xdo(["mousemove", str(start_x), str(start_y)])
+            time.sleep(0.2)
+            self.xdo(["mousedown", "1"])
+            time.sleep(0.5) # 드래그 중 체류 시간
+            self.xdo(["mousemove", str(dest_x), str(dest_y)])
+            time.sleep(0.5)
+            self.xdo(["mouseup", "1"])
+            
+            # 상태 추적 업데이트
+            self.fuzzer.interacted_elements.add(node_hash)
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"[Drag] Failed: {e}")
+            return False
 
     def act_menu_exploration(self):
         """
