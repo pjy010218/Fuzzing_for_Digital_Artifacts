@@ -27,9 +27,22 @@ class FeedbackServer:
         self.running = True
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        bind_success = False
+        for _ in range(5):
+            try:
+                self.server_sock.bind((HOST, PORT))
+                bind_success = True
+                break
+            except OSError:
+                self.logger.warning("Port busy, retrying...")
+                time.sleep(1)
+        
+        if not bind_success:
+            self.logger.error("[-] IPC Bind Failed after retries.")
+            return
         
         try:
-            self.server_sock.bind((HOST, PORT))
             self.server_sock.listen(1)
             self.logger.info(f"[*] IPC Server listening on {HOST}:{PORT}")
             

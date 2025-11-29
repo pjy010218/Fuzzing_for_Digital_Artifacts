@@ -7,6 +7,8 @@ __pycache__/
 *.so
 *.sh
 *.json
+*.txt
+*.png
 
 # Distribution / packaging
 .Python
@@ -17,12 +19,17 @@ dist/
 downloads/
 eggs/
 .eggs/
+firefox/
+profiles/
+temp/
 lib/
 lib64/
 parts/
 sdist/
 var/
 venv/
+core/fuzzing/gui/radamsa/
+experiment_data/
 wheels/
 share/python-wheels/
 *.egg-info/
